@@ -352,6 +352,24 @@
                         <input type="number" id="consumerGroups" name="consumerGroups" value="2" min="1" required>
                         <small>同時に同じデータを購読する独立したコンシューマーグループの数。MirrorMaker2も1つのコンシューマーグループとして計算されます。</small>
                     </div>
+
+                    <div class="form-group">
+                        <label for="compressionEnabled">メッセージ圧縮使用</label>
+                        <select id="compressionEnabled" name="compressionEnabled" required>
+                            <option value="true">あり（snappy、lz4等推奨）</option>
+                            <option value="false">なし</option>
+                        </select>
+                        <small>プロデューサーでのメッセージ圧縮使用。一般的にプロダクション環境では有効にします。CPU使用量が増加しますが、ネットワーク・ストレージ効率が向上します。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tlsEnabled">TLS暗号化使用</label>
+                        <select id="tlsEnabled" name="tlsEnabled" required>
+                            <option value="false">なし（プレーンテキスト通信）</option>
+                            <option value="true">あり（SSL/TLS暗号化）</option>
+                        </select>
+                        <small>クライアント-ブローカー間とブローカー間通信のTLS暗号化。有効にするとブローカーとMM2のCPU使用量が増加します。</small>
+                    </div>
                 </div>
 
                 <div class="form-section">
@@ -364,24 +382,6 @@
                             <option value="unidirectional">単方向 (Blue → Green)</option>
                         </select>
                         <small>単方向同期を実施している場合は単方向を選択してください。</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="compressionEnabled">圧縮使用</label>
-                        <select id="compressionEnabled" name="compressionEnabled" required>
-                            <option value="false">なし</option>
-                            <option value="true">あり（CPU使用量増加）</option>
-                        </select>
-                        <small>メッセージ圧縮を使用する場合、CPU使用量が増加します。</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="tlsEnabled">TLS暗号化使用</label>
-                        <select id="tlsEnabled" name="tlsEnabled" required>
-                            <option value="false">なし</option>
-                            <option value="true">あり（CPU使用量増加）</option>
-                        </select>
-                        <small>TLS暗号化を使用する場合、CPU使用量が増加します。</small>
                     </div>
                 </div>
 
@@ -428,6 +428,20 @@
                     <div class="info">
                         <strong>MirrorMaker2の考慮：</strong><br>
                         MirrorMaker2もソースクラスター側では1つのコンシューマーグループとして動作するため、MM2による負荷を計算に含める必要があります。
+                    </div>
+
+                    <h4>7. メッセージ圧縮使用</h4>
+                    <p>プロデューサーでメッセージ圧縮（snappy、lz4、gzip、zstd等）を使用するかどうかの設定です。</p>
+                    <div class="info">
+                        <strong>一般的な運用パターン：</strong><br>
+                        プロダクション環境では通常圧縮を有効にします。snappyやlz4は低CPUオーバーヘッドで良好な圧縮率を提供し、ネットワーク帯域とストレージコストを大幅に削減できます。圧縮使用時はブローカーで+4vCPU、MM2で+1vCPU程度の追加リソースが必要ですが、全体的なコスト効率は向上します。
+                    </div>
+
+                    <h4>8. TLS暗号化使用</h4>
+                    <p>クライアント-ブローカー間通信およびブローカー間通信でSSL/TLS暗号化を使用するかどうかの設定です。</p>
+                    <div class="info">
+                        <strong>セキュリティとパフォーマンス：</strong><br>
+                        TLS暗号化はデータの機密性を保護しますが、暗号化・復号化処理でCPU使用量が大幅に増加します。特にハンドシェイク処理と継続的な暗号化でブローカーとMM2両方のCPU負荷が増加します。TLS使用時はブローカーで+4vCPU、MM2で+1vCPU程度の追加リソースが必要です。
                     </div>
                 </div>
             </div>
@@ -506,34 +520,63 @@
             <div class="knowledge-section">
                 <h3>計算式の詳細</h3>
                 <div class="knowledge-content">
+                    <h4>基本データ量の計算</h4>
+                    <div class="formula">
+                        秒間データ量(bytes) = メッセージ/秒 × 平均メッセージサイズ(KB) × 1024
+                        日次データ量(GB) = 秒間データ量 × 86400秒 ÷ (1024³)
+                        
+                        ※ 双方向ミラーリングの場合は入力値を2倍にして計算
+                    </div>
+
                     <h4>ブローカー数の計算</h4>
                     <div class="formula">
-                        ブローカー数 = max(
-                            ceil((総パーティション数 × レプリケーションファクター) / 4000),
-                            ceil(処理量要件による必要数)
-                        )
+                        <strong>1. パーティション制約による必要数：</strong>
+                        パーティション制約ブローカー数 = ceil((総パーティション数 × レプリケーションファクター) / 4000)
+                        
+                        <strong>2. 処理量制約による必要数：</strong>
+                        ブローカー実効スループット = 213MB/s × 0.8 = 170MB/s (安全率80%適用)
+                        処理量制約ブローカー数 = ceil(秒間データ量(MB/s) ÷ 170MB/s)
+                        
+                        <strong>3. 最終決定：</strong>
+                        ブローカー数 = max(3, パーティション制約数, 処理量制約数)
+                    </div>
+
+                    <h4>CPU計算（圧縮・TLS考慮）</h4>
+                    <div class="formula">
+                        <strong>ブローカーCPU：</strong>
+                        基本CPU = 8 vCPU
+                        + 圧縮使用時 = +4 vCPU
+                        + TLS使用時 = +4 vCPU
+                        
+                        <strong>MM2 CPU：</strong>
+                        基本CPU = max(2, ceil(tasks.max ÷ ワーカー数))
+                        + 圧縮使用時 = +1 vCPU
+                        + TLS使用時 = +1 vCPU
                     </div>
 
                     <h4>ストレージ容量の計算</h4>
                     <div class="formula">
-                        ブローカー当たり必要容量 = 
-                        (日別入力データ量 × 保管日数 × レプリケーションファクター) / ブローカー数 / 0.85
-                        
-                        ※ 0.85は85%使用率制限を考慮した余裕率
+                        総必要ストレージ = 日次データ量 × 保管日数 × レプリケーションファクター
+                        ブローカー当たり容量 = 総必要ストレージ ÷ ブローカー数
+                        実際のPVC容量 = ブローカー当たり容量 ÷ 0.85 (85%使用率制限)
                     </div>
 
                     <h4>メモリ計算（ページキャッシュ）</h4>
                     <div class="formula">
-                        推奨メモリ = JVMヒープ + (30秒分のデータ量をキャッシュできる容量)
-                        
-                        30秒分データ量 = (メッセージ/秒 × 平均サイズ × 30) / ブローカー数
+                        JVMヒープ = 6GB (固定推奨値)
+                        30秒分キャッシュ容量 = (秒間データ量 × 30) ÷ ブローカー数 ÷ (1024²) (GB)
+                        推奨総メモリ = JVMヒープ + 30秒分キャッシュ容量
+                        最終メモリ = max(32GB, 推奨総メモリ)
                     </div>
 
                     <h4>MM2 tasks.max の計算</h4>
                     <div class="formula">
-                        tasks.max = min(複製対象パーティション数, 利用可能な総vCPU数)
+                        利用可能総CPU = ブローカー数 × ブローカー当たりCPU
+                        tasks.max = min(複製対象パーティション数, 利用可能総CPU)
                         
-                        ※ CPU1コア当たり1タスクが理想的
+                        MM2メモリ = max(2GB, CPU当たり0.5GB × MM2 CPU)
+                        
+                        ※ CPU1コア当たり1タスクが理想的な並列度
                     </div>
                 </div>
             </div>
