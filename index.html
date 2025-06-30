@@ -316,7 +316,7 @@
                     <div class="form-group">
                         <label for="messagesPerSecond">メッセージ処理量（メッセージ/秒）</label>
                         <input type="number" id="messagesPerSecond" name="messagesPerSecond" value="10000" min="1" required>
-                        <small>クラスター全体に流入する平均またはピークメッセージ数。双方向ミラーリングの場合は実際の処理量が約2倍になることを考慮済み。</small>
+                        <small>クラスターに流入する平均またはピークメッセージ数。MirrorMaker2による複製トラフィックは無視して入力してください（自動で計算に含まれます）。</small>
                     </div>
 
                     <div class="form-group">
@@ -328,7 +328,7 @@
                     <div class="form-group">
                         <label for="totalPartitions">総パーティション数</label>
                         <input type="number" id="totalPartitions" name="totalPartitions" value="1000" min="1" required>
-                        <small>すべてのトピックのパーティション数の合計。双方向ミラーリングの場合は原本トピック数の約2倍のパーティションが各クラスターに存在します。</small>
+                        <small>すべてのトピックのパーティション数の合計。双方向ミラーリングの場合は複製トピックが追加されるため、実際のパーティション数は2倍として計算されます。MirrorMaker2による複製パーティションは無視して入力してください。</small>
                     </div>
 
                     <div class="form-group">
@@ -356,10 +356,10 @@
                     <div class="form-group">
                         <label for="mirroringType">ミラーリングタイプ</label>
                         <select id="mirroringType" name="mirroringType" required>
-                            <option value="unidirectional">単方向 (A → B)</option>
-                            <option value="bidirectional">双方向 (A ⇄ B)</option>
+                            <option value="bidirectional">双方向 (Blue ⇄ Green)</option>
+                            <option value="unidirectional">単方向 (Blue → Green)</option>
                         </select>
-                        <small>単方向の場合は1つの方向のみ、双方向の場合は両方向のMM2インスタンスが必要です。</small>
+                        <small>単方向同期を実施している場合は単方向を選択してください。</small>
                     </div>
 
                     <div class="form-group">
@@ -392,10 +392,10 @@
                 <h3>入力パラメータの詳細説明</h3>
                 <div class="knowledge-content">
                     <h4>1. メッセージ処理量（メッセージ/秒）</h4>
-                    <p>クラスター全体に流入する平均またはピークメッセージ数を意味します。これにより秒間バイト処理量を計算できます（例：msgs_per_sec × avg_msg_size）。</p>
+                    <p>クラスターに流入する平均またはピークメッセージ数を意味します。これにより秒間バイト処理量を計算できます（例：msgs_per_sec × avg_msg_size）。</p>
                     <div class="info">
-                        <strong>Active-Active双方向ミラーリングの考慮事項：</strong><br>
-                        各クラスターには自体生産者データと原隔クラスターからミラーされたデータが全て流入するため、実際の処理量は単方向場合の約2倍として考慮する必要があります。
+                        <strong>双方向ミラーリングの自動計算：</strong><br>
+                        MirrorMaker2による複製トラフィックは無視して入力してください。双方向ミラーリングの場合、各クラスターには入力したデータとMirrorMaker2による複製データが共存するため、実際の処理量は入力値の2倍として自動計算されます。
                     </div>
 
                     <h4>2. 平均メッセージサイズ（KB）</h4>
@@ -405,9 +405,9 @@
                     </div>
 
                     <h4>3. 総パーティション数</h4>
-                    <p>すべてのトピックのパーティション数の合計です。双方向ミラーリング時は原本トピック数の2倍に該当するパーティションが各クラスターに存在します。</p>
+                    <p>すべてのトピックのパーティション数の合計です。MirrorMaker2による複製パーティションは無視して入力してください。</p>
                     <div class="warning">
-                        <strong>重要：</strong> この値はリーダー+フォロワーレプリカを全て含んだパーティション総計として計算する必要があります。
+                        <strong>重要：</strong> 双方向ミラーリングの場合、複製トピックが追加されるため実際のパーティション数は2倍として自動計算されます。この値はリーダー+フォロワーレプリカを全て含んだパーティション総計として計算されます。
                     </div>
 
                     <h4>4. メッセージ保管期間（日）</h4>
@@ -431,28 +431,70 @@
             <div class="knowledge-section">
                 <h3>リソース計算の根拠</h3>
                 <div class="knowledge-content">
-                    <h4>Kafka コントローラー</h4>
+                    <h4>Kafka コントローラー（KRaftモード）</h4>
                     <ul>
-                        <li><strong>Pod数：</strong> KRaftコントローラーは2n+1の奇数個で構成、一般的にプロダクションでは3台を推奨</li>
-                        <li><strong>CPU：</strong> Confluent ガイドによるとコントローラー当たり4 vCPUを推奨</li>
-                        <li><strong>メモリ：</strong> メタデータログ維持のため4GB程度、JVMヒープは1GB程度で十分</li>
-                        <li><strong>ストレージ：</strong> Confluent推奨はコントローラー当たり64GB SSD</li>
+                        <li><strong>Pod数：</strong> KRaftコントローラーは2n+1の奇数個で構成し、過半数投票による可用性を確保します。プロダクション環境では最低3台（典型的には3台、必要に応じて5台）を推奨</li>
+                        <li><strong>CPU：</strong> コントローラー1台当たり約4 vCPUを割り当て。メタデータ管理が主な役割ですが、安定動作のため十分なCPUリソースを確保</li>
+                        <li><strong>メモリ：</strong> メタデータログ保持のため約4GB。JVMヒープは1GB程度で十分（Kafkaはコントローラーに大容量ヒープを要求しません）</li>
+                        <li><strong>ストレージ：</strong> 高速SSDが必須。Confluent推奨はコントローラー1台当たり約64GB SSD。メタデータ専用として信頼性と速度の高いディスクが必要</li>
                     </ul>
 
                     <h4>Kafka ブローカー</h4>
                     <ul>
-                        <li><strong>Pod数：</strong> パーティション数（ブローカー1台当たり4,000個以下推奨）と処理量の両方を考慮</li>
-                        <li><strong>CPU：</strong> 一般的にブローカー当たり4〜8 vCPU（request）、最大24 vCPUまでスケールアップ可能</li>
-                        <li><strong>メモリ：</strong> JVMヒープ6GB以下、残りは全てページキャッシュとして活用（推奨：32〜64GB総メモリ）</li>
-                        <li><strong>ストレージ：</strong> 日別データ量 × 保管期間 × レプリケーションファクター ÷ ブローカー数</li>
+                        <li><strong>Pod数：</strong> 
+                            <ul>
+                                <li>パーティション制約：1ブローカー当たり最大約4,000個まで推奨</li>
+                                <li>スループット制約：ブローカー当たりの最大処理能力を考慮</li>
+                                <li>例：3ノード・RF=3・2消費グループのクラスターでは理論上800MB/s程度が上限、本番では80%程度（640MB/s）に抑制推奨</li>
+                            </ul>
+                        </li>
+                        <li><strong>CPU：</strong> 
+                            <ul>
+                                <li>一般的にブローカー当たり4〜8 vCPU（request）、最大24 vCPUまでスケールアップ</li>
+                                <li>多くのKafka本番クラスターでは1台当たり24コア程度を使用</li>
+                                <li>CPUクロックよりもコア数を重視し、並行処理能力で高スループットを実現</li>
+                            </ul>
+                        </li>
+                        <li><strong>メモリ：</strong> 
+                            <ul>
+                                <li>JVMヒープは6GB以下に抑制（Kafkaはヒープを慎重に使用）</li>
+                                <li>残りメモリは全てOSページキャッシュとして活用</li>
+                                <li>推奨：ブローカー1台当たり32〜64GB（64GB RAMサーバーが理想的）</li>
+                                <li>例：総メモリ32GBでヒープ6GBの場合、約26GBをディスクキャッシュに充当</li>
+                            </ul>
+                        </li>
+                        <li><strong>ストレージ：</strong> 
+                            <ul>
+                                <li>計算式：日次データ流入量 × 保管日数 × レプリカ係数 ÷ ブローカー数</li>
+                                <li>重要：ディスク使用率85%以下を維持（余裕率15%確保）</li>
+                                <li>例：日次1TB × 7日 × RF3 = 21TB → 85%ルール適用で約24.7TB必要</li>
+                            </ul>
+                        </li>
                     </ul>
 
-                    <h4>MirrorMaker2</h4>
+                    <h4>MirrorMaker2（クロスデータセンター複製）</h4>
                     <ul>
-                        <li><strong>Pod数：</strong> 高可用性のため最低2個のワーカーノード（pod）を推奨</li>
-                        <li><strong>tasks.max：</strong> 複製対象パーティション数またはCPU数に合わせて設定</li>
-                        <li><strong>CPU：</strong> MM2ワーカー当たり1〜2 vCPUを基本、高処理量環境では4 vCPU以上</li>
-                        <li><strong>メモリ：</strong> JVMヒープ1〜2GB程度で十分、ワーカー当たり1〜4GBメモリ配当</li>
+                        <li><strong>Pod数：</strong> 
+                            <ul>
+                                <li>Kafka Connectフレームワーク上で動作、高可用性のため最低2つ以上のワーカーノード</li>
+                                <li>双方向同期（Active-Active）では各方向に別個のコネクターが必要</li>
+                            </ul>
+                        </li>
+                        <li><strong>tasks.max：</strong> 
+                            <ul>
+                                <li>理想設定：min(複製元パーティション総数, 利用可能CPUコア数)</li>
+                                <li>1タスクにつき1コア程度を割り当てる想定で計画</li>
+                                <li>例：ソース10パーティション、8CPUコアの場合 → tasks.max = 8</li>
+                            </ul>
+                        </li>
+                        <li><strong>CPU：</strong> 
+                            <ul>
+                                <li>基本：ワーカー当たり1〜2 vCPU</li>
+                                <li>高負荷環境：各ワーカー当たり4 vCPU以上</li>
+                                <li>プロデューサー・コンシューマー両方の処理負荷を考慮</li>
+                            </ul>
+                        </li>
+                        <li><strong>メモリ：</strong> JVMヒープ1〜4GB程度、バッファリングを考慮してCPU当たり0.5GB配分が目安</li>
                     </ul>
                 </div>
             </div>
@@ -488,6 +530,40 @@
                         tasks.max = min(複製対象パーティション数, 利用可能な総vCPU数)
                         
                         ※ CPU1コア当たり1タスクが理想的
+                    </div>
+                </div>
+            </div>
+
+            <div class="knowledge-section">
+                <h3>参考文献・出典</h3>
+                <div class="knowledge-content">
+                    <h4>公式ドキュメント</h4>
+                    <ul>
+                        <li><a href="https://docs.confluent.io/platform/current/kafka-metadata/config-kraft.html" target="_blank">Configure and Monitor KRaft | Confluent Documentation</a></li>
+                        <li><a href="https://docs.confluent.io/platform/current/installation/system-requirements.html" target="_blank">Confluent Platform System Requirements | Confluent Documentation</a></li>
+                        <li><a href="https://docs.confluent.io/platform/6.1/kafka/deployment.html" target="_blank">Running Kafka in Production | Confluent Documentation</a></li>
+                        <li><a href="https://docs.aws.amazon.com/msk/latest/developerguide/bestpractices.html" target="_blank">Best practices for Standard brokers - Amazon Managed Streaming for Apache Kafka</a></li>
+                    </ul>
+
+                    <h4>技術ブログ・ベストプラクティス</h4>
+                    <ul>
+                        <li><a href="https://aws.amazon.com/blogs/big-data/best-practices-for-right-sizing-your-apache-kafka-clusters-to-optimize-performance-and-cost/" target="_blank">Best practices for right-sizing your Apache Kafka clusters to optimize performance and cost | AWS Big Data Blog</a></li>
+                        <li><a href="https://www.confluent.io/blog/apache-kafka-supports-200k-partitions-per-cluster/" target="_blank">Apache Kafka Supports 200K Partitions Per Cluster | Confluent</a></li>
+                        <li><a href="https://www.instaclustr.com/blog/how-to-size-apache-kafka-clusters-for-tiered-storage-part-3/" target="_blank">How to size Apache Kafka® clusters for Tiered Storage: Part 3 - Instaclustr</a></li>
+                    </ul>
+
+                    <h4>MirrorMaker2関連</h4>
+                    <ul>
+                        <li><a href="https://aiven.io/docs/products/kafka/kafka-mirrormaker/concepts/disaster-recovery/active-active-setup" target="_blank">MirrorMaker 2 active-active setup | Aiven docs</a></li>
+                        <li><a href="https://www.instaclustr.com/blog/apache-kafka-mirrormaker-2-practice/" target="_blank">Apache Kafka MirrorMaker 2 (MM2) Part 2: Practice</a></li>
+                        <li><a href="https://cloud.google.com/managed-service-for-apache-kafka/docs/connect-cluster/create-mirrormaker-connector" target="_blank">Create a MirrorMaker 2.0 connector | Google Cloud Managed Service for Apache Kafka</a></li>
+                        <li><a href="https://aiven.io/docs/products/kafka/kafka-mirrormaker/reference/advanced-params" target="_blank">Advanced parameters for Aiven for Apache Kafka® MirrorMaker 2 | Aiven docs</a></li>
+                        <li><a href="https://www.redpanda.com/guides/kafka-alternatives-kafka-mirrormaker" target="_blank">Kafka MirrorMaker—Tutorial, best practices and alternatives</a></li>
+                    </ul>
+
+                    <div class="info">
+                        <strong>注意事項：</strong><br>
+                        本計算ツールは上記の信頼できるソースに基づいて作成されていますが、実際の環境では必ず負荷テストとモニタリングによる調整を行ってください。リソース要件は具体的なワークロードと環境に大きく依存します。
                     </div>
                 </div>
             </div>
@@ -544,7 +620,14 @@
 
             // ブローカー計算
             const brokersByPartitions = Math.ceil((actualTotalPartitions * replicationFactor) / 4000);
-            const brokersByThroughput = Math.ceil(bytesPerSecond / (200 * 1024 * 1024 * 0.8)); // 200MB/s per broker, 80% utilization
+            
+            // 改善されたスループット計算：3ノード・RF=3・2消費グループで800MB/s理論値、80%で640MB/s実用値を基準
+            // この基準から各ブローカーの実効スループットを約213MB/s (640/3) と推定
+            const brokerThroughputMBps = 213; // MB/s per broker (実測ベース)
+            const safetyFactor = 0.8; // 80%安全率
+            const effectiveThroughputPerBroker = brokerThroughputMBps * safetyFactor; // 約170MB/s
+            
+            const brokersByThroughput = Math.ceil((bytesPerSecond / 1024 / 1024) / effectiveThroughputPerBroker);
             const brokerPods = Math.max(3, Math.max(brokersByPartitions, brokersByThroughput)); // 最小3台
 
             let brokerCPU = 8; // base vCPU per broker
@@ -645,12 +728,37 @@
                         <h5>📋 計算根拠</h5>
                         <ul>
                             <li><strong>Pod数の決定：</strong></li>
-                            <li>・パーティション数による制約：${results.calculations.actualTotalPartitions} × ${document.getElementById('replicationFactor').value} ÷ 4000 = ${results.calculations.brokersByPartitions}台</li>
-                            <li>・処理量による制約：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s ÷ 160MB/s = ${results.calculations.brokersByThroughput}台</li>
-                            <li>・最終決定：max(3, ${Math.max(results.calculations.brokersByPartitions, results.calculations.brokersByThroughput)}) = ${results.broker.pods}台</li>
-                            <li><strong>CPU設定：</strong> 基本8vCPU${results.calculations.compressionEnabled ? ' + 圧縮処理4vCPU' : ''}${results.calculations.tlsEnabled ? ' + TLS暗号化4vCPU' : ''}</li>
-                            <li><strong>メモリ設定：</strong> JVMヒープ6GB + 30秒分データキャッシュ用${Math.round(results.broker.memory - 6)}GB</li>
-                            <li><strong>ストレージ：</strong> ${Math.round(results.calculations.dailyDataGB)}GB/日 × ${document.getElementById('retentionDays').value}日 × ${document.getElementById('replicationFactor').value} ÷ ${results.broker.pods}台 ÷ 0.85 = ${results.broker.storage}GB/pod</li>
+                            <li>　🔸 <strong>基本データ処理量計算：</strong></li>
+                            <li>　　- 入力メッセージ処理量：${document.getElementById('messagesPerSecond').value}メッセージ/秒</li>
+                            <li>　　- 平均メッセージサイズ：${document.getElementById('avgMessageSize').value}KB</li>
+                            <li>　　- ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリング調整：' + document.getElementById('messagesPerSecond').value + ' × 2 = ' + results.calculations.actualMessagesPerSecond + 'メッセージ/秒' : '単方向のため調整なし：' + results.calculations.actualMessagesPerSecond + 'メッセージ/秒'}</li>
+                            <li>　　- 秒間データ量：${results.calculations.actualMessagesPerSecond} × ${document.getElementById('avgMessageSize').value}KB = ${Math.round(results.calculations.bytesPerSecond / 1024)}KB/s = ${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s</li>
+                            <li>　🔸 <strong>パーティション数による制約：</strong></li>
+                            <li>　　- 入力パーティション数：${document.getElementById('totalPartitions').value}</li>
+                            <li>　　- ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリング調整：' + document.getElementById('totalPartitions').value + ' × 2 = ' + results.calculations.actualTotalPartitions : '単方向のため調整なし：' + results.calculations.actualTotalPartitions}</li>
+                            <li>　　- 総レプリカ数：${results.calculations.actualTotalPartitions} × ${document.getElementById('replicationFactor').value} = ${results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)}</li>
+                            <li>　　- 必要ブローカー数：ceil(${results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)} ÷ 4000) = ${results.calculations.brokersByPartitions}台</li>
+                            <li>　🔸 <strong>処理量による制約：</strong></li>
+                            <li>　　- クラスター秒間処理量：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s</li>
+                            <li>　　- ブローカー実効スループット基準：213MB/s（3ノード・RF=3・2消費グループで640MB/s実用値の1/3）</li>
+                            <li>　　- 安全率（80%使用）適用：213MB/s × 0.8 = 170MB/s</li>
+                            <li>　　- 必要ブローカー数：ceil(${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s ÷ 170MB/s) = ${results.calculations.brokersByThroughput}台</li>
+                            <li>　🔸 <strong>最終決定：</strong> max(最小3台, パーティション制約${results.calculations.brokersByPartitions}台, 処理量制約${results.calculations.brokersByThroughput}台) = ${results.broker.pods}台</li>
+                            <li><strong>CPU設定：</strong></li>
+                            <li>　- 基本CPU：8vCPU</li>
+                            ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+4vCPU</li>' : ''}
+                            ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+4vCPU</li>' : ''}
+                            <li>　- 合計CPU：${results.broker.cpu}vCPU/pod</li>
+                            <li><strong>メモリ設定：</strong></li>
+                            <li>　- JVMヒープ：6GB（固定）</li>
+                            <li>　- 30秒分データキャッシュ：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024 / results.broker.pods * 30)}MB ≈ ${Math.round(results.broker.memory - 6)}GB</li>
+                            <li>　- 合計メモリ：6GB + ${Math.round(results.broker.memory - 6)}GB = ${results.broker.memory}GB/pod</li>
+                            <li><strong>ストレージ計算：</strong></li>
+                            <li>　- 日次データ量：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)} MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB/日</li>
+                            <li>　- 保管期間考慮：${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 = ${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value))}GB</li>
+                            <li>　- レプリケーション考慮：${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value))}GB × ${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB</li>
+                            <li>　- ブローカー分散：${Math.round(results.calculations.totalStorageGB)}GB ÷ ${results.broker.pods}台 = ${Math.round(results.calculations.totalStorageGB / results.broker.pods)}GB/pod</li>
+                            <li>　- 安全率（85%使用）適用：${Math.round(results.calculations.totalStorageGB / results.broker.pods)}GB ÷ 0.85 = ${results.broker.storage}GB/pod</li>
                         </ul>
                     </div>
                 </div>
@@ -671,11 +779,23 @@
                     <div class="explanation">
                         <h5>📋 計算根拠</h5>
                         <ul>
-                            <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（A→B、B→A）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
+                            <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（Blue→Green、Green→Blue）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
                             <li><strong>ワーカー数：</strong> 高可用性のため各インスタンスに2つのワーカーを配置</li>
-                            <li><strong>tasks.max：</strong> min(複製対象パーティション${document.getElementById('totalPartitions').value}, 利用可能CPU${results.broker.pods * results.broker.cpu}) = ${results.mm2.tasksMax}</li>
-                            <li><strong>CPU設定：</strong> タスク数に基づく基本CPU${Math.max(2, Math.ceil(results.mm2.tasksMax / results.mm2.workersPerInstance))}vCPU${results.calculations.compressionEnabled ? ' + 圧縮処理1vCPU' : ''}${results.calculations.tlsEnabled ? ' + TLS暗号化1vCPU' : ''}</li>
-                            <li><strong>メモリ設定：</strong> JVMヒープ使用量とバッファリングを考慮してCPU当たり0.5GB配分</li>
+                            <li>　- インスタンス数：${results.mm2.instances}</li>
+                            <li>　- ワーカー数/インスタンス：${results.mm2.workersPerInstance}</li>
+                            <li>　- 総ワーカー数：${results.mm2.instances} × ${results.mm2.workersPerInstance} = ${results.mm2.totalWorkers}</li>
+                            <li><strong>tasks.max計算：</strong></li>
+                            <li>　- 複製対象パーティション数：${document.getElementById('totalPartitions').value}</li>
+                            <li>　- 利用可能総CPU数：${results.broker.pods}ブローカー × ${results.broker.cpu}vCPU = ${results.broker.pods * results.broker.cpu}vCPU</li>
+                            <li>　- tasks.max：min(${document.getElementById('totalPartitions').value}, ${results.broker.pods * results.broker.cpu}) = ${results.mm2.tasksMax}</li>
+                            <li><strong>CPU設定：</strong></li>
+                            <li>　- タスク数に基づく基本CPU：max(2, ceil(${results.mm2.tasksMax} ÷ ${results.mm2.workersPerInstance})) = ${Math.max(2, Math.ceil(results.mm2.tasksMax / results.mm2.workersPerInstance))}vCPU</li>
+                            ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+1vCPU</li>' : ''}
+                            ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+1vCPU</li>' : ''}
+                            <li>　- 合計CPU：${results.mm2.cpu}vCPU/pod</li>
+                            <li><strong>メモリ設定：</strong></li>
+                            <li>　- CPU当たり配分：${results.mm2.cpu}vCPU × 0.5GB = ${Math.round(results.mm2.cpu * 0.5 * 10) / 10}GB</li>
+                            <li>　- 最小保証：max(2GB, ${Math.round(results.mm2.cpu * 0.5 * 10) / 10}GB) = ${results.mm2.memory}GB/pod</li>
                         </ul>
                     </div>
                 </div>
@@ -687,8 +807,8 @@
                         <tr><td>メッセージ処理量</td><td>${document.getElementById('messagesPerSecond').value}/秒</td><td>${results.calculations.actualMessagesPerSecond}/秒</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
                         <tr><td>総パーティション数</td><td>${document.getElementById('totalPartitions').value}</td><td>${results.calculations.actualTotalPartitions}</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
                         <tr><td>コンシューマーグループ数</td><td>${document.getElementById('consumerGroups').value}</td><td>${results.calculations.actualConsumerGroups}</td><td>MM2を1つのコンシューマーグループとして追加</td></tr>
-                        <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s × 86400秒</td></tr>
-                        <tr><td>必要総ストレージ</td><td>-</td><td>${Math.round(results.calculations.totalStorageGB)}GB</td><td>日次データ × 保管期間 × レプリケーションファクター</td></tr>
+                        <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB</td></tr>
+                        <tr><td>必要総ストレージ</td><td>-</td><td>${Math.round(results.calculations.totalStorageGB)}GB</td><td>${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 × RF${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB</td></tr>
                     </table>
                 </div>
 
