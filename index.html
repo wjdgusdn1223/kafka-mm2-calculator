@@ -534,7 +534,9 @@
                         パーティション制約ブローカー数 = ceil((総パーティション数 × レプリケーションファクター) / 4000)
                         
                         <strong>2. 処理量制約による必要数：</strong>
-                        ブローカー実効スループット = 213MB/s × 0.8 = 170MB/s (安全率80%適用)
+                        ブローカー理論スループット = 213MB/s 
+                        ※ 実測根拠：3ノード・RF=3・2消費グループ環境で800MB/s理論値 → 640MB/s実用値(80%効率) → 213MB/s/ブローカー(640÷3)
+                        ブローカー実効スループット = 213MB/s × 0.8 = 170MB/s (運用安全率80%適用)
                         処理量制約ブローカー数 = ceil(秒間データ量(MB/s) ÷ 170MB/s)
                         
                         <strong>3. 最終決定：</strong>
@@ -795,7 +797,8 @@
                             <li>　　- 必要ブローカー数：ceil(${results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)} ÷ 4000) = ${results.calculations.brokersByPartitions}台</li>
                             <li>　🔸 <strong>処理量による制約：</strong></li>
                             <li>　　- クラスター秒間処理量：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s</li>
-                            <li>　　- ブローカー実効スループット基準：213MB/s（3ノード・RF=3・2消費グループで640MB/s実用値の1/3）</li>
+                            <li>　　- ブローカー理論スループット基準：213MB/s</li>
+                            <li>　　　🔍 <em>実測根拠：3ノード・RF=3・2消費グループ環境 → 800MB/s理論値 → 640MB/s実用値(80%効率) → 213MB/s/ブローカー(640÷3)</em></li>
                             <li>　　- 安全率（80%使用）適用：213MB/s × 0.8 = 170MB/s</li>
                             <li>　　- 必要ブローカー数：ceil(${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s ÷ 170MB/s) = ${results.calculations.brokersByThroughput}台</li>
                             <li>　🔸 <strong>最終決定：</strong> max(最小3台, パーティション制約${results.calculations.brokersByPartitions}台, 処理量制約${results.calculations.brokersByThroughput}台) = ${results.broker.pods}台</li>
