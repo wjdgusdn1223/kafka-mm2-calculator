@@ -301,6 +301,10 @@
         <div class="header">
             <h1>Kafka & MirrorMaker2 リソース計算機</h1>
             <p>KRaftモード対応 - Kubernetesデプロイメント用のリソース算定ツール</p>
+            <div class="warning" style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-top: 15px; border-left: 4px solid #dc3545;">
+                <strong>⚠️ 重要な注意事項</strong><br>
+                本ツールの計算結果は参考値であり、正確な最終回答ではありません。Kafka と MirrorMaker2 導入時のリソース量を概算するための目安としてご利用ください。実際の環境では必ず負荷テストとモニタリングによる調整が必要です。
+            </div>
         </div>
 
         <div class="tabs">
@@ -813,14 +817,19 @@
                 </div>
 
                 <div class="result-section">
-                    <h4>⚠️ 運用上の注意事項</h4>
+                    <h4>⚠️ 重要な免責事項と運用上の注意事項</h4>
+                    <div class="warning" style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #dc3545;">
+                        <strong>📢 この計算結果について</strong><br>
+                        上記の計算結果は<strong>参考値・概算値</strong>であり、正確な最終回答ではありません。Kafka と MirrorMaker2 導入時に<strong>「どの程度のリソースが必要か」を把握するための目安</strong>としてご活用ください。実際のプロダクション環境では、これらの値を出発点として必ず負荷テストとモニタリングによる調整を行ってください。
+                    </div>
                     <div class="explanation">
                         <ul>
                             <li><strong>ディスク使用率：</strong> 85%を超えないよう監視し、必要に応じてストレージを増設してください</li>
                             <li><strong>CPU使用率：</strong> 平常時60%以下を維持し、ピーク時の負荷に備えてください</li>
                             <li><strong>メモリ使用率：</strong> JVMヒープは総メモリの25%以下に抑え、残りをページキャッシュとして活用してください</li>
                             <li><strong>ネットワーク：</strong> 各ブローカーが${Math.round(results.calculations.bytesPerSecond / results.broker.pods / 1024 / 1024)}MB/s程度の処理を行うため、十分なネットワーク帯域を確保してください</li>
-                            <li><strong>モニタリング：</strong> 本計算結果を基に実際の負荷テストを行い、環境に応じて調整してください</li>
+                            <li><strong>負荷テスト：</strong> 本計算結果を出発点として実際の負荷テストを行い、環境に応じて必ず調整してください</li>
+                            <li><strong>継続的モニタリング：</strong> 実際の使用量を継続的に監視し、必要に応じてリソースを調整してください</li>
                         </ul>
                     </div>
                 </div>
