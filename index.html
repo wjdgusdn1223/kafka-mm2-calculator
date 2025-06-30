@@ -555,27 +555,36 @@
                         ※ 双方向ミラーリングの場合は入力値を2倍にして計算
                     </div>
 
-                    <h4>ブローカー数の計算</h4>
+                    <h4>統合リソース制約によるブローカー数計算</h4>
                     <div class="formula">
-                        <strong>1. パーティション制約による必要数：</strong>
-                        パーティション制約ブローカー数 = ceil((総パーティション数 × レプリケーションファクター) / 4000)
+                        <strong>1. p値（vCPU当たり処理能力）：</strong>
+                        p = 20 MB/s (基本値)
+                        × メッセージサイズ係数 (小型0.5, 大型1.5)
+                        × TLS係数 (0.7)
+                        × 圧縮係数 (0.6)
                         
-                        <strong>2. 処理量制約による必要数：</strong>
-                        ブローカー理論スループット = 213MB/s 
-                        ※ 実測根拠：3ノード・RF=3・2消費グループ環境で800MB/s理論値 → 640MB/s実用値(80%効率) → 213MB/s/ブローカー(640÷3)
-                        ブローカー実効スループット = 213MB/s × 0.8 = 170MB/s (運用安全率80%適用)
-                        処理量制約ブローカー数 = ceil(秒間データ量(MB/s) ÷ 170MB/s)
+                        <strong>2. 各制約による必要ブローカー数：</strong>
+                        - パーティション制約：ceil((総パーティション数 × RF) / 4000)
+                        - ネットワーク制約：ceil(総処理量 / NIC安全容量)
+                        - ディスク制約：ceil(総処理量 / ディスク安全容量)
                         
                         <strong>3. 最終決定：</strong>
-                        ブローカー数 = max(3, パーティション制約数, 処理量制約数)
+                        ブローカー数 = max(3, 最大制約値)
+                        
+                        <strong>4. ブローカー当たりCPU：</strong>
+                        必要CPU = ceil((ブローカー当たり処理量 / p値) / 0.6)
+                        最終CPU = max(4vCPU, 必要CPU)
                     </div>
 
-                    <h4>CPU計算（圧縮・TLS考慮）</h4>
+                    <h4>メモリ計算（精密化）</h4>
                     <div class="formula">
-                        <strong>ブローカーCPU：</strong>
-                        基本CPU = 8 vCPU
-                        + 圧縮使用時 = +4 vCPU
-                        + TLS使用時 = +4 vCPU
+                        <strong>ブローカーメモリ：</strong>
+                        JVMヒープ = 6GB (固定)
+                        + 直接バッファ = JVMヒープ × (TLS10% + 圧縮10%)
+                        + ページキャッシュ = (処理量 × キャッシュ分数 × 60) / 1024
+                        + OS余裕 = 上記合計 × 10%
+                        
+                        最終メモリ = max(計算値, 32GB以上推奨)
                         
                         <strong>MM2 CPU：</strong>
                         基本CPU = max(2, ceil(tasks.max ÷ ワーカー数))
@@ -879,22 +888,27 @@
                             <li>　　- ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリング調整：' + document.getElementById('totalPartitions').value + ' × 2 = ' + results.calculations.actualTotalPartitions : '単方向のため調整なし：' + results.calculations.actualTotalPartitions}</li>
                             <li>　　- 総レプリカ数：${results.calculations.actualTotalPartitions} × ${document.getElementById('replicationFactor').value} = ${results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)}</li>
                             <li>　　- 必要ブローカー数：ceil(${results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)} ÷ 4000) = ${results.calculations.brokersByPartitions}台</li>
-                            <li>　🔸 <strong>処理量による制約：</strong></li>
-                            <li>　　- クラスター秒間処理量：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s</li>
-                            <li>　　- ブローカー理論スループット基準：213MB/s</li>
-                            <li>　　　🔍 <em>実測根拠：3ノード・RF=3・2消費グループ環境 → 800MB/s理論値 → 640MB/s実用値(80%効率) → 213MB/s/ブローカー(640÷3)</em></li>
-                            <li>　　- 安全率（80%使用）適用：213MB/s × 0.8 = 170MB/s</li>
-                            <li>　　- 必要ブローカー数：ceil(${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s ÷ 170MB/s) = ${results.calculations.brokersByThroughput}台</li>
-                            <li>　🔸 <strong>最終決定：</strong> max(最小3台, パーティション制約${results.calculations.brokersByPartitions}台, 処理量制約${results.calculations.brokersByThroughput}台) = ${results.broker.pods}台</li>
+                            <li>　🔸 <strong>ハードウェア制約による必要ブローカー数：</strong></li>
+                            <li>　　- クラスター総処理量：${Math.round(results.calculations.tCluster)}MB/s</li>
+                            <li>　　- p値（vCPU当たり処理能力）：${Math.round(results.calculations.pValue * 10) / 10}MB/s/vCPU</li>
+                            <li>　　　🔍 <em>基本20MB/s ${results.calculations.avgMessageSize < 1 ? '× 小型メッセージ(0.5)' : results.calculations.avgMessageSize > 10 ? '× 大型メッセージ(1.5)' : ''} ${results.calculations.tlsEnabled ? '× TLS(0.7)' : ''} ${results.calculations.compressionEnabled ? '× 圧縮(0.6)' : ''}</em></li>
+                            <li>　　- ネットワーク制約：ceil(${Math.round(results.calculations.tCluster)}MB/s ÷ ${Math.round(results.calculations.capNIC_perBroker)}MB/s) = ${results.calculations.brokersByNIC}台</li>
+                            <li>　　- ディスク制約：ceil(${Math.round(results.calculations.tCluster)}MB/s ÷ ${Math.round(results.calculations.capDisk_perBroker)}MB/s) = ${results.calculations.brokersByDisk}台</li>
+                            <li>　🔸 <strong>最終決定：</strong> max(最小3台, パーティション${results.calculations.brokersByPartitions}台, ネットワーク${results.calculations.brokersByNIC}台, ディスク${results.calculations.brokersByDisk}台) = ${results.broker.pods}台</li>
+                            <li>　🔸 <strong>主要ボトルネック：</strong> ${results.calculations.bottleneckSource === 'partitions' ? 'パーティション数' : results.calculations.bottleneckSource === 'network' ? 'ネットワーク帯域幅' : 'ディスクI/O'}</li>
                             <li><strong>CPU設定：</strong></li>
-                            <li>　- 基本CPU：8vCPU</li>
-                            ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+4vCPU</li>' : ''}
-                            ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+4vCPU</li>' : ''}
-                            <li>　- 合計CPU：${results.broker.cpu}vCPU/pod</li>
+                            <li>　- ブローカー当たり実処理量：${Math.round(results.calculations.tBroker * 10) / 10}MB/s</li>
+                            <li>　- 必要vCPU：ceil(${Math.round(results.calculations.tBroker * 10) / 10}MB/s ÷ (${Math.round(results.calculations.pValue * 10) / 10}MB/s/vCPU × 0.6)) = ${Math.ceil(results.calculations.tBroker / (results.calculations.pValue * 0.6))}vCPU</li>
+                            <li>　- 最小保証：max(4vCPU, ${Math.ceil(results.calculations.tBroker / (results.calculations.pValue * 0.6))}vCPU) = ${results.broker.cpu}vCPU/pod</li>
+                            <li>　- CPU使用率制限：60%（運用安全率）</li>
                             <li><strong>メモリ設定：</strong></li>
-                            <li>　- JVMヒープ：6GB（固定）</li>
-                            <li>　- 30秒分データキャッシュ：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024 / results.broker.pods * 30)}MB ≈ ${Math.round(results.broker.memory - 6)}GB</li>
-                            <li>　- 合計メモリ：6GB + ${Math.round(results.broker.memory - 6)}GB = ${results.broker.memory}GB/pod</li>
+                            <li>　- JVMヒープ：${results.calculations.jvmHeap}GB（固定）</li>
+                            <li>　- 直接バッファオーバーヘッド：${Math.round(results.calculations.directBufferOverhead * 10) / 10}GB ${results.calculations.tlsEnabled || results.calculations.compressionEnabled ? '(TLS/圧縮各10%)' : ''}</li>
+                            <li>　- ページキャッシュ：${Math.round(results.calculations.requiredPageCache * 10) / 10}GB（${results.calculations.cacheMinutes}分 × ${Math.round(results.calculations.tBroker * 10) / 10}MB/s）</li>
+                            <li>　- 基本合計：${Math.round(results.calculations.baseMemory * 10) / 10}GB</li>
+                            <li>　- OS余裕（10%）：${Math.round(results.calculations.baseMemory * 0.1 * 10) / 10}GB</li>
+                            <li>　- 計算値：${results.calculations.calculatedMemory}GB</li>
+                            <li>　- 最終メモリ：max(${results.calculations.calculatedMemory}GB, 32GB以上推奨) = ${results.broker.memory}GB/pod</li>
                             <li><strong>ストレージ計算：</strong></li>
                             <li>　- 日次データ量：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)} MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB/日</li>
                             <li>　- 保管期間考慮：${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 = ${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value))}GB</li>
@@ -911,7 +925,7 @@
                         <tr><th>リソース</th><th>値</th><th>単位</th></tr>
                         <tr><td>インスタンス数</td><td>${results.mm2.instances}</td><td>個 (${results.calculations.mirroringType === 'bidirectional' ? '双方向' : '単方向'})</td></tr>
                         <tr><td>ワーカー数/インスタンス</td><td>${results.mm2.workersPerInstance}</td><td>pod/インスタンス</td></tr>
-                        <tr><td>総Pod数</td><td>${results.mm2.totalWorkers}</td><td>個</td></tr>
+                        <tr><td>総Pod数（方向当たり）</td><td>${results.mm2.workersPerInstance}</td><td>個</td></tr>
                         <tr><td>tasks.max</td><td>${results.mm2.tasksMax}</td><td>個/インスタンス</td></tr>
                         <tr><td>CPU (Request)</td><td>${results.mm2.cpuPerWorker}</td><td>vCPU/pod</td></tr>
                         <tr><td>CPU (Limit)</td><td>${Math.ceil(results.mm2.cpuPerWorker * 1.5)}</td><td>vCPU/pod</td></tr>
@@ -922,19 +936,20 @@
                         <h5>📋 計算根拠</h5>
                         <ul>
                             <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（Blue→Green、Green→Blue）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
+                            <li><strong>リソース計算基準：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向でも各方向は独立動作のため、単方向基準でリソース計算' : '単方向なので直接計算'}</li>
                             <li><strong>ワーカー数：</strong> 高可用性のため各インスタンスに2つのワーカーを配置</li>
                             <li>　- インスタンス数：${results.mm2.instances}</li>
                             <li>　- ワーカー数/インスタンス：${results.mm2.workersPerInstance}</li>
-                            <li>　- 総ワーカー数：${results.mm2.instances} × ${results.mm2.workersPerInstance} = ${results.mm2.totalWorkers}</li>
+                            <li>　- リソース計算対象：${results.mm2.workersPerInstance}ワーカー（方向当たり）</li>
                             <li><strong>CPU設定：</strong></li>
                             <li>　- 基本CPU/ワーカー：2vCPU</li>
                             ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+1vCPU</li>' : ''}
                             ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+1vCPU</li>' : ''}
                             <li>　- ワーカー当たりCPU：${results.mm2.cpuPerWorker}vCPU</li>
-                            <li>　- MM2総CPU数：${results.mm2.totalWorkers}ワーカー × ${results.mm2.cpuPerWorker}vCPU = ${results.mm2.totalCPU}vCPU</li>
+                            <li>　- MM2総CPU数（方向当たり）：${results.mm2.totalWorkersPerDirection}ワーカー × ${results.mm2.cpuPerWorker}vCPU = ${results.mm2.totalCPU}vCPU</li>
                             <li><strong>tasks.max計算：</strong></li>
                             <li>　- 複製対象パーティション数：${document.getElementById('totalPartitions').value}</li>
-                            <li>　- MM2利用可能総CPU数：${results.mm2.totalCPU}vCPU</li>
+                            <li>　- MM2利用可能総CPU数（方向当たり）：${results.mm2.totalCPU}vCPU</li>
                             <li>　- tasks.max：min(${document.getElementById('totalPartitions').value}, ${results.mm2.totalCPU}) = ${results.mm2.tasksMax}</li>
                             <li><strong>メモリ設定：</strong></li>
                             <li>　- CPU当たり配分：${results.mm2.cpuPerWorker}vCPU × 0.5GB = ${Math.round(results.mm2.cpuPerWorker * 0.5 * 10) / 10}GB</li>
