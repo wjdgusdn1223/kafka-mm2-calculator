@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kafka & MirrorMaker2 リソース計算機</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 20px;
+            text-align: center;
+            cursor: pointer;
+            background: #f8f9fa;
+            border: none;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab:hover {
+            background: #e9ecef;
+        }
+
+        .tab.active:hover {
+            background: #5a6fd8;
+        }
+
+        .tab-content {
+            display: none;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-section {
+            margin-bottom: 30px;
+        }
+
+        .form-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 5px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group small {
+            display: block;
+            margin-top: 5px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .calculate-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        .calculate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .result-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .result-section h4 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .resource-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        .resource-table th, .resource-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .resource-table th {
+            background-color: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+
+        .resource-table tr:hover {
+            background-color: #f1f3f4;
+        }
+
+        .explanation {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            border-left: 4px solid #2196f3;
+        }
+
+        .explanation h5 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+
+        .explanation ul {
+            padding-left: 20px;
+        }
+
+        .explanation li {
+            margin-bottom: 5px;
+        }
+
+        .knowledge-section {
+            margin-bottom: 30px;
+        }
+
+        .knowledge-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.4rem;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 10px;
+        }
+
+        .knowledge-content {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            line-height: 1.7;
+        }
+
+        .knowledge-content h4 {
+            color: #495057;
+            margin: 20px 0 10px 0;
+        }
+
+        .knowledge-content ul {
+            padding-left: 20px;
+            margin-bottom: 15px;
+        }
+
+        .knowledge-content li {
+            margin-bottom: 8px;
+        }
+
+        .formula {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #ffc107;
+            font-family: monospace;
+            font-size: 0.95rem;
+        }
+
+        .warning {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #dc3545;
+        }
+
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border-left: 4px solid #17a2b8;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .tabs {
+                flex-direction: column;
+            }
+            
+            .tab {
+                border-bottom: 1px solid #dee2e6;
+            }
+            
+            .tab:last-child {
+                border-bottom: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Kafka & MirrorMaker2 リソース計算機</h1>
+            <p>KRaftモード対応 - Kubernetesデプロイメント用のリソース算定ツール</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="openTab(event, 'calculator')">リソース計算</button>
+            <button class="tab" onclick="openTab(event, 'knowledge')">ベース知識</button>
+        </div>
+
+        <div id="calculator" class="tab-content active">
+            <form id="calculatorForm">
+                <div class="form-section">
+                    <h3>基本パラメータ</h3>
+                    
+                    <div class="form-group">
+                        <label for="messagesPerSecond">メッセージ処理量（メッセージ/秒）</label>
+                        <input type="number" id="messagesPerSecond" name="messagesPerSecond" value="10000" min="1" required>
+                        <small>クラスター全体に流入する平均またはピークメッセージ数。双方向ミラーリングの場合は実際の処理量が約2倍になることを考慮済み。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="avgMessageSize">平均メッセージサイズ（KB）</label>
+                        <input type="number" id="avgMessageSize" name="avgMessageSize" value="1" min="0.1" step="0.1" required>
+                        <small>各メッセージの平均サイズ。処理量と掛け合わせて秒間データ量を計算します。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="totalPartitions">総パーティション数</label>
+                        <input type="number" id="totalPartitions" name="totalPartitions" value="1000" min="1" required>
+                        <small>すべてのトピックのパーティション数の合計。双方向ミラーリングの場合は原本トピック数の約2倍のパーティションが各クラスターに存在します。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="retentionDays">メッセージ保管期間（日）</label>
+                        <input type="number" id="retentionDays" name="retentionDays" value="7" min="1" required>
+                        <small>データがクラスターに保存される期間。ストレージ容量計算に使用されます。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="replicationFactor">レプリケーションファクター</label>
+                        <input type="number" id="replicationFactor" name="replicationFactor" value="3" min="1" max="7" required>
+                        <small>各トピックの複製本数。通常は3を推奨します。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="consumerGroups">コンシューマーグループ数</label>
+                        <input type="number" id="consumerGroups" name="consumerGroups" value="2" min="1" required>
+                        <small>同時に同じデータを購読する独立したコンシューマーグループの数。MirrorMaker2も1つのコンシューマーグループとして計算されます。</small>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3>MirrorMaker2設定</h3>
+                    
+                    <div class="form-group">
+                        <label for="mirroringType">ミラーリングタイプ</label>
+                        <select id="mirroringType" name="mirroringType" required>
+                            <option value="unidirectional">単方向 (A → B)</option>
+                            <option value="bidirectional">双方向 (A ⇄ B)</option>
+                        </select>
+                        <small>単方向の場合は1つの方向のみ、双方向の場合は両方向のMM2インスタンスが必要です。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="compressionEnabled">圧縮使用</label>
+                        <select id="compressionEnabled" name="compressionEnabled" required>
+                            <option value="false">なし</option>
+                            <option value="true">あり（CPU使用量増加）</option>
+                        </select>
+                        <small>メッセージ圧縮を使用する場合、CPU使用量が増加します。</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tlsEnabled">TLS暗号化使用</label>
+                        <select id="tlsEnabled" name="tlsEnabled" required>
+                            <option value="false">なし</option>
+                            <option value="true">あり（CPU使用量増加）</option>
+                        </select>
+                        <small>TLS暗号化を使用する場合、CPU使用量が増加します。</small>
+                    </div>
+                </div>
+
+                <button type="submit" class="calculate-btn">リソースを計算する</button>
+            </form>
+
+            <div id="results" class="results" style="display: none;"></div>
+        </div>
+
+        <div id="knowledge" class="tab-content">
+            <div class="knowledge-section">
+                <h3>入力パラメータの詳細説明</h3>
+                <div class="knowledge-content">
+                    <h4>1. メッセージ処理量（メッセージ/秒）</h4>
+                    <p>クラスター全体に流入する平均またはピークメッセージ数を意味します。これにより秒間バイト処理量を計算できます（例：msgs_per_sec × avg_msg_size）。</p>
+                    <div class="info">
+                        <strong>Active-Active双方向ミラーリングの考慮事項：</strong><br>
+                        各クラスターには自体生産者データと原隔クラスターからミラーされたデータが全て流入するため、実際の処理量は単方向場合の約2倍として考慮する必要があります。
+                    </div>
+
+                    <h4>2. 平均メッセージサイズ（KB）</h4>
+                    <p>各メッセージの平均サイズです。メッセージサイズと処理量を掛けて秒間データ量（例：MB/s）を計算し、ディスクおよびネットワーク容量計算に使用します。</p>
+                    <div class="formula">
+                        例：平均1KBメッセージを秒間10,000件処理 = 約10MB/sのデータ率
+                    </div>
+
+                    <h4>3. 総パーティション数</h4>
+                    <p>すべてのトピックのパーティション数の合計です。双方向ミラーリング時は原本トピック数の2倍に該当するパーティションが各クラスターに存在します。</p>
+                    <div class="warning">
+                        <strong>重要：</strong> この値はリーダー+フォロワーレプリカを全て含んだパーティション総計として計算する必要があります。
+                    </div>
+
+                    <h4>4. メッセージ保管期間（日）</h4>
+                    <p>データがクラスターに保存される期間で、与えられたretention期間中に保存される総データ量を計算するのに必要です。</p>
+                    <div class="formula">
+                        例：日次データ流入量1TB、保管期間7日 → 最低7TBのストレージ必要（レプリカファクターおよび余裕容量除く）
+                    </div>
+
+                    <h4>5. レプリケーションファクター</h4>
+                    <p>各トピックの複製本数です（例：3）。レプリケーションファクターがrの場合、1つのメッセージがクラスター内r個のブローカーに保存されるため、保存容量および内部複製トラフィックがr倍増加します。</p>
+
+                    <h4>6. コンシューマーグループ数</h4>
+                    <p>同時に同じデータを購読する独立したコンシューマーグループの数です。コンシューマーグループが多いほどブローカーのアウトバウンドトラフィックが増加します。</p>
+                    <div class="info">
+                        <strong>MirrorMaker2の考慮：</strong><br>
+                        MirrorMaker2もソースクラスター側では1つのコンシューマーグループとして動作するため、MM2による負荷を計算に含める必要があります。
+                    </div>
+                </div>
+            </div>
+
+            <div class="knowledge-section">
+                <h3>リソース計算の根拠</h3>
+                <div class="knowledge-content">
+                    <h4>Kafka コントローラー</h4>
+                    <ul>
+                        <li><strong>Pod数：</strong> KRaftコントローラーは2n+1の奇数個で構成、一般的にプロダクションでは3台を推奨</li>
+                        <li><strong>CPU：</strong> Confluent ガイドによるとコントローラー当たり4 vCPUを推奨</li>
+                        <li><strong>メモリ：</strong> メタデータログ維持のため4GB程度、JVMヒープは1GB程度で十分</li>
+                        <li><strong>ストレージ：</strong> Confluent推奨はコントローラー当たり64GB SSD</li>
+                    </ul>
+
+                    <h4>Kafka ブローカー</h4>
+                    <ul>
+                        <li><strong>Pod数：</strong> パーティション数（ブローカー1台当たり4,000個以下推奨）と処理量の両方を考慮</li>
+                        <li><strong>CPU：</strong> 一般的にブローカー当たり4〜8 vCPU（request）、最大24 vCPUまでスケールアップ可能</li>
+                        <li><strong>メモリ：</strong> JVMヒープ6GB以下、残りは全てページキャッシュとして活用（推奨：32〜64GB総メモリ）</li>
+                        <li><strong>ストレージ：</strong> 日別データ量 × 保管期間 × レプリケーションファクター ÷ ブローカー数</li>
+                    </ul>
+
+                    <h4>MirrorMaker2</h4>
+                    <ul>
+                        <li><strong>Pod数：</strong> 高可用性のため最低2個のワーカーノード（pod）を推奨</li>
+                        <li><strong>tasks.max：</strong> 複製対象パーティション数またはCPU数に合わせて設定</li>
+                        <li><strong>CPU：</strong> MM2ワーカー当たり1〜2 vCPUを基本、高処理量環境では4 vCPU以上</li>
+                        <li><strong>メモリ：</strong> JVMヒープ1〜2GB程度で十分、ワーカー当たり1〜4GBメモリ配当</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="knowledge-section">
+                <h3>計算式の詳細</h3>
+                <div class="knowledge-content">
+                    <h4>ブローカー数の計算</h4>
+                    <div class="formula">
+                        ブローカー数 = max(
+                            ceil((総パーティション数 × レプリケーションファクター) / 4000),
+                            ceil(処理量要件による必要数)
+                        )
+                    </div>
+
+                    <h4>ストレージ容量の計算</h4>
+                    <div class="formula">
+                        ブローカー当たり必要容量 = 
+                        (日別入力データ量 × 保管日数 × レプリケーションファクター) / ブローカー数 / 0.85
+                        
+                        ※ 0.85は85%使用率制限を考慮した余裕率
+                    </div>
+
+                    <h4>メモリ計算（ページキャッシュ）</h4>
+                    <div class="formula">
+                        推奨メモリ = JVMヒープ + (30秒分のデータ量をキャッシュできる容量)
+                        
+                        30秒分データ量 = (メッセージ/秒 × 平均サイズ × 30) / ブローカー数
+                    </div>
+
+                    <h4>MM2 tasks.max の計算</h4>
+                    <div class="formula">
+                        tasks.max = min(複製対象パーティション数, 利用可能な総vCPU数)
+                        
+                        ※ CPU1コア当たり1タスクが理想的
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function openTab(evt, tabName) {
+            var i, tabcontent, tabs;
+            tabcontent = document.getElementsByClassName("tab-content");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].classList.remove("active");
+            }
+            tabs = document.getElementsByClassName("tab");
+            for (i = 0; i < tabs.length; i++) {
+                tabs[i].classList.remove("active");
+            }
+            document.getElementById(tabName).classList.add("active");
+            evt.currentTarget.classList.add("active");
+        }
+
+        document.getElementById('calculatorForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            calculateResources();
+        });
+
+        function calculateResources() {
+            // 入力値を取得
+            const messagesPerSecond = parseInt(document.getElementById('messagesPerSecond').value);
+            const avgMessageSize = parseFloat(document.getElementById('avgMessageSize').value);
+            const totalPartitions = parseInt(document.getElementById('totalPartitions').value);
+            const retentionDays = parseInt(document.getElementById('retentionDays').value);
+            const replicationFactor = parseInt(document.getElementById('replicationFactor').value);
+            const consumerGroups = parseInt(document.getElementById('consumerGroups').value);
+            const mirroringType = document.getElementById('mirroringType').value;
+            const compressionEnabled = document.getElementById('compressionEnabled').value === 'true';
+            const tlsEnabled = document.getElementById('tlsEnabled').value === 'true';
+
+            // 双方向ミラーリングの場合の調整
+            const actualMessagesPerSecond = mirroringType === 'bidirectional' ? messagesPerSecond * 2 : messagesPerSecond;
+            const actualTotalPartitions = mirroringType === 'bidirectional' ? totalPartitions * 2 : totalPartitions;
+            const actualConsumerGroups = consumerGroups + 1; // MM2を1つのコンシューマーグループとして追加
+
+            // 基本計算
+            const bytesPerSecond = actualMessagesPerSecond * avgMessageSize * 1024; // KB to bytes
+            const dailyDataGB = (bytesPerSecond * 86400) / (1024 * 1024 * 1024); // GB/day
+            const totalStorageGB = dailyDataGB * retentionDays * replicationFactor;
+
+            // コントローラー計算
+            const controllerPods = 3; // 推奨値
+            const controllerCPU = 4; // vCPU per pod
+            const controllerMemory = 4; // GB per pod
+            const controllerStorage = 64; // GB per pod
+
+            // ブローカー計算
+            const brokersByPartitions = Math.ceil((actualTotalPartitions * replicationFactor) / 4000);
+            const brokersByThroughput = Math.ceil(bytesPerSecond / (200 * 1024 * 1024 * 0.8)); // 200MB/s per broker, 80% utilization
+            const brokerPods = Math.max(3, Math.max(brokersByPartitions, brokersByThroughput)); // 最小3台
+
+            let brokerCPU = 8; // base vCPU per broker
+            if (compressionEnabled) brokerCPU += 4;
+            if (tlsEnabled) brokerCPU += 4;
+
+            const cachingMemoryGB = Math.max(2, (bytesPerSecond * 30) / (1024 * 1024 * 1024) / brokerPods); // 30秒分キャッシュ
+            const brokerMemory = Math.max(32, 6 + cachingMemoryGB); // JVMヒープ6GB + キャッシュ用メモリ
+            const brokerStoragePerPod = Math.ceil((totalStorageGB / brokerPods) / 0.85); // 85%利用率考慮
+
+            // MM2計算
+            const mm2Instances = mirroringType === 'bidirectional' ? 2 : 1;
+            const mm2WorkersPerInstance = 2; // 推奨値
+            const mm2TotalWorkers = mm2Instances * mm2WorkersPerInstance;
+            
+            const tasksMax = Math.min(totalPartitions, brokerPods * brokerCPU);
+            let mm2CPU = Math.max(2, Math.ceil(tasksMax / mm2WorkersPerInstance));
+            if (compressionEnabled) mm2CPU += 1;
+            if (tlsEnabled) mm2CPU += 1;
+            
+            const mm2Memory = Math.max(2, Math.ceil(mm2CPU * 0.5)); // CPU依存
+
+            // 結果表示
+            displayResults({
+                controller: {
+                    pods: controllerPods,
+                    cpu: controllerCPU,
+                    memory: controllerMemory,
+                    storage: controllerStorage
+                },
+                broker: {
+                    pods: brokerPods,
+                    cpu: brokerCPU,
+                    memory: brokerMemory,
+                    storage: brokerStoragePerPod,
+                    totalStorage: Math.ceil(totalStorageGB / 0.85)
+                },
+                mm2: {
+                    instances: mm2Instances,
+                    workersPerInstance: mm2WorkersPerInstance,
+                    totalWorkers: mm2TotalWorkers,
+                    cpu: mm2CPU,
+                    memory: mm2Memory,
+                    tasksMax: tasksMax
+                },
+                calculations: {
+                    actualMessagesPerSecond,
+                    actualTotalPartitions,
+                    actualConsumerGroups,
+                    bytesPerSecond,
+                    dailyDataGB,
+                    totalStorageGB,
+                    brokersByPartitions,
+                    brokersByThroughput,
+                    mirroringType,
+                    compressionEnabled,
+                    tlsEnabled
+                }
+            });
+        }
+
+        function displayResults(results) {
+            const resultsDiv = document.getElementById('results');
+            
+            resultsDiv.innerHTML = `
+                <div class="result-section">
+                    <h4>🎛️ Kafka コントローラー</h4>
+                    <table class="resource-table">
+                        <tr><th>リソース</th><th>値</th><th>単位</th></tr>
+                        <tr><td>Pod数</td><td>${results.controller.pods}</td><td>個</td></tr>
+                        <tr><td>CPU (Request/Limit)</td><td>${results.controller.cpu}</td><td>vCPU/pod</td></tr>
+                        <tr><td>メモリ (Request/Limit)</td><td>${results.controller.memory}</td><td>GB/pod</td></tr>
+                        <tr><td>ストレージ (PVC)</td><td>${results.controller.storage}</td><td>GB/pod</td></tr>
+                    </table>
+                    <div class="explanation">
+                        <h5>📋 計算根拠</h5>
+                        <ul>
+                            <li>KRaftモードでは高可用性のために奇数個（通常3個）のコントローラーが必要</li>
+                            <li>Confluent推奨仕様：コントローラー当たり4vCPU、4GBメモリ、64GB SSD</li>
+                            <li>メタデータログの保存と管理が主な役割のため、比較的軽量な構成</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="result-section">
+                    <h4>🏪 Kafka ブローカー</h4>
+                    <table class="resource-table">
+                        <tr><th>リソース</th><th>値</th><th>単位</th></tr>
+                        <tr><td>Pod数</td><td>${results.broker.pods}</td><td>個</td></tr>
+                        <tr><td>CPU (Request)</td><td>${results.broker.cpu}</td><td>vCPU/pod</td></tr>
+                        <tr><td>CPU (Limit)</td><td>${Math.ceil(results.broker.cpu * 1.5)}</td><td>vCPU/pod</td></tr>
+                        <tr><td>メモリ (Request)</td><td>${results.broker.memory}</td><td>GB/pod</td></tr>
+                        <tr><td>メモリ (Limit)</td><td>${Math.ceil(results.broker.memory * 1.2)}</td><td>GB/pod</td></tr>
+                        <tr><td>ストレージ (PVC)</td><td>${results.broker.storage}</td><td>GB/pod</td></tr>
+                        <tr><td>クラスター総ストレージ</td><td>${results.broker.totalStorage}</td><td>GB</td></tr>
+                    </table>
+                    <div class="explanation">
+                        <h5>📋 計算根拠</h5>
+                        <ul>
+                            <li><strong>Pod数の決定：</strong></li>
+                            <li>・パーティション数による制約：${results.calculations.actualTotalPartitions} × ${document.getElementById('replicationFactor').value} ÷ 4000 = ${results.calculations.brokersByPartitions}台</li>
+                            <li>・処理量による制約：${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s ÷ 160MB/s = ${results.calculations.brokersByThroughput}台</li>
+                            <li>・最終決定：max(3, ${Math.max(results.calculations.brokersByPartitions, results.calculations.brokersByThroughput)}) = ${results.broker.pods}台</li>
+                            <li><strong>CPU設定：</strong> 基本8vCPU${results.calculations.compressionEnabled ? ' + 圧縮処理4vCPU' : ''}${results.calculations.tlsEnabled ? ' + TLS暗号化4vCPU' : ''}</li>
+                            <li><strong>メモリ設定：</strong> JVMヒープ6GB + 30秒分データキャッシュ用${Math.round(results.broker.memory - 6)}GB</li>
+                            <li><strong>ストレージ：</strong> ${Math.round(results.calculations.dailyDataGB)}GB/日 × ${document.getElementById('retentionDays').value}日 × ${document.getElementById('replicationFactor').value} ÷ ${results.broker.pods}台 ÷ 0.85 = ${results.broker.storage}GB/pod</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="result-section">
+                    <h4>🔄 MirrorMaker2</h4>
+                    <table class="resource-table">
+                        <tr><th>リソース</th><th>値</th><th>単位</th></tr>
+                        <tr><td>インスタンス数</td><td>${results.mm2.instances}</td><td>個 (${results.calculations.mirroringType === 'bidirectional' ? '双方向' : '単方向'})</td></tr>
+                        <tr><td>ワーカー数/インスタンス</td><td>${results.mm2.workersPerInstance}</td><td>pod/インスタンス</td></tr>
+                        <tr><td>総Pod数</td><td>${results.mm2.totalWorkers}</td><td>個</td></tr>
+                        <tr><td>tasks.max</td><td>${results.mm2.tasksMax}</td><td>個/インスタンス</td></tr>
+                        <tr><td>CPU (Request)</td><td>${results.mm2.cpu}</td><td>vCPU/pod</td></tr>
+                        <tr><td>CPU (Limit)</td><td>${Math.ceil(results.mm2.cpu * 1.5)}</td><td>vCPU/pod</td></tr>
+                        <tr><td>メモリ (Request)</td><td>${results.mm2.memory}</td><td>GB/pod</td></tr>
+                        <tr><td>メモリ (Limit)</td><td>${Math.ceil(results.mm2.memory * 1.5)}</td><td>GB/pod</td></tr>
+                    </table>
+                    <div class="explanation">
+                        <h5>📋 計算根拠</h5>
+                        <ul>
+                            <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（A→B、B→A）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
+                            <li><strong>ワーカー数：</strong> 高可用性のため各インスタンスに2つのワーカーを配置</li>
+                            <li><strong>tasks.max：</strong> min(複製対象パーティション${document.getElementById('totalPartitions').value}, 利用可能CPU${results.broker.pods * results.broker.cpu}) = ${results.mm2.tasksMax}</li>
+                            <li><strong>CPU設定：</strong> タスク数に基づく基本CPU${Math.max(2, Math.ceil(results.mm2.tasksMax / results.mm2.workersPerInstance))}vCPU${results.calculations.compressionEnabled ? ' + 圧縮処理1vCPU' : ''}${results.calculations.tlsEnabled ? ' + TLS暗号化1vCPU' : ''}</li>
+                            <li><strong>メモリ設定：</strong> JVMヒープ使用量とバッファリングを考慮してCPU当たり0.5GB配分</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="result-section">
+                    <h4>📊 計算サマリー</h4>
+                    <table class="resource-table">
+                        <tr><th>項目</th><th>入力値</th><th>調整後の値</th><th>説明</th></tr>
+                        <tr><td>メッセージ処理量</td><td>${document.getElementById('messagesPerSecond').value}/秒</td><td>${results.calculations.actualMessagesPerSecond}/秒</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
+                        <tr><td>総パーティション数</td><td>${document.getElementById('totalPartitions').value}</td><td>${results.calculations.actualTotalPartitions}</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
+                        <tr><td>コンシューマーグループ数</td><td>${document.getElementById('consumerGroups').value}</td><td>${results.calculations.actualConsumerGroups}</td><td>MM2を1つのコンシューマーグループとして追加</td></tr>
+                        <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s × 86400秒</td></tr>
+                        <tr><td>必要総ストレージ</td><td>-</td><td>${Math.round(results.calculations.totalStorageGB)}GB</td><td>日次データ × 保管期間 × レプリケーションファクター</td></tr>
+                    </table>
+                </div>
+
+                <div class="result-section">
+                    <h4>⚠️ 運用上の注意事項</h4>
+                    <div class="explanation">
+                        <ul>
+                            <li><strong>ディスク使用率：</strong> 85%を超えないよう監視し、必要に応じてストレージを増設してください</li>
+                            <li><strong>CPU使用率：</strong> 平常時60%以下を維持し、ピーク時の負荷に備えてください</li>
+                            <li><strong>メモリ使用率：</strong> JVMヒープは総メモリの25%以下に抑え、残りをページキャッシュとして活用してください</li>
+                            <li><strong>ネットワーク：</strong> 各ブローカーが${Math.round(results.calculations.bytesPerSecond / results.broker.pods / 1024 / 1024)}MB/s程度の処理を行うため、十分なネットワーク帯域を確保してください</li>
+                            <li><strong>モニタリング：</strong> 本計算結果を基に実際の負荷テストを行い、環境に応じて調整してください</li>
+                        </ul>
+                    </div>
+                </div>
+            `;
+            
+            resultsDiv.style.display = 'block';
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
