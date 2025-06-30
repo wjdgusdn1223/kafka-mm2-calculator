@@ -571,10 +571,11 @@
 
                     <h4>MM2 tasks.max の計算</h4>
                     <div class="formula">
-                        利用可能総CPU = ブローカー数 × ブローカー当たりCPU
-                        tasks.max = min(複製対象パーティション数, 利用可能総CPU)
+                        MM2ワーカー当たりCPU = 基本2vCPU + 圧縮(+1) + TLS(+1)
+                        MM2総CPU数 = MM2総ワーカー数 × ワーカー当たりCPU
+                        tasks.max = min(複製対象パーティション数, MM2総CPU数)
                         
-                        MM2メモリ = max(2GB, CPU当たり0.5GB × MM2 CPU)
+                        MM2メモリ = max(2GB, ワーカー当たりCPU × 0.5GB)
                         
                         ※ CPU1コア当たり1タスクが理想的な並列度
                     </div>
@@ -690,12 +691,18 @@
             const mm2WorkersPerInstance = 2; // 推奨値
             const mm2TotalWorkers = mm2Instances * mm2WorkersPerInstance;
             
-            const tasksMax = Math.min(totalPartitions, brokerPods * brokerCPU);
-            let mm2CPU = Math.max(2, Math.ceil(tasksMax / mm2WorkersPerInstance));
-            if (compressionEnabled) mm2CPU += 1;
-            if (tlsEnabled) mm2CPU += 1;
+            // MM2 워커당 기본 CPU 할당 (압축/TLS 고려)
+            let mm2CPUPerWorker = 2; // 기본값
+            if (compressionEnabled) mm2CPUPerWorker += 1;
+            if (tlsEnabled) mm2CPUPerWorker += 1;
             
-            const mm2Memory = Math.max(2, Math.ceil(mm2CPU * 0.5)); // CPU依存
+            // MM2 총 CPU 수 계산
+            const mm2TotalCPU = mm2TotalWorkers * mm2CPUPerWorker;
+            
+            // tasks.max는 MM2의 총 CPU 수를 기준으로 계산
+            const tasksMax = Math.min(totalPartitions, mm2TotalCPU);
+            
+            const mm2Memory = Math.max(2, Math.ceil(mm2CPUPerWorker * 0.5)); // 워커당 CPU 기반
 
             // 結果表示
             displayResults({
@@ -716,7 +723,8 @@
                     instances: mm2Instances,
                     workersPerInstance: mm2WorkersPerInstance,
                     totalWorkers: mm2TotalWorkers,
-                    cpu: mm2CPU,
+                    cpuPerWorker: mm2CPUPerWorker,
+                    totalCPU: mm2TotalCPU,
                     memory: mm2Memory,
                     tasksMax: tasksMax
                 },
@@ -818,8 +826,8 @@
                         <tr><td>ワーカー数/インスタンス</td><td>${results.mm2.workersPerInstance}</td><td>pod/インスタンス</td></tr>
                         <tr><td>総Pod数</td><td>${results.mm2.totalWorkers}</td><td>個</td></tr>
                         <tr><td>tasks.max</td><td>${results.mm2.tasksMax}</td><td>個/インスタンス</td></tr>
-                        <tr><td>CPU (Request)</td><td>${results.mm2.cpu}</td><td>vCPU/pod</td></tr>
-                        <tr><td>CPU (Limit)</td><td>${Math.ceil(results.mm2.cpu * 1.5)}</td><td>vCPU/pod</td></tr>
+                        <tr><td>CPU (Request)</td><td>${results.mm2.cpuPerWorker}</td><td>vCPU/pod</td></tr>
+                        <tr><td>CPU (Limit)</td><td>${Math.ceil(results.mm2.cpuPerWorker * 1.5)}</td><td>vCPU/pod</td></tr>
                         <tr><td>メモリ (Request)</td><td>${results.mm2.memory}</td><td>GB/pod</td></tr>
                         <tr><td>メモリ (Limit)</td><td>${Math.ceil(results.mm2.memory * 1.5)}</td><td>GB/pod</td></tr>
                     </table>
@@ -831,18 +839,19 @@
                             <li>　- インスタンス数：${results.mm2.instances}</li>
                             <li>　- ワーカー数/インスタンス：${results.mm2.workersPerInstance}</li>
                             <li>　- 総ワーカー数：${results.mm2.instances} × ${results.mm2.workersPerInstance} = ${results.mm2.totalWorkers}</li>
-                            <li><strong>tasks.max計算：</strong></li>
-                            <li>　- 複製対象パーティション数：${document.getElementById('totalPartitions').value}</li>
-                            <li>　- 利用可能総CPU数：${results.broker.pods}ブローカー × ${results.broker.cpu}vCPU = ${results.broker.pods * results.broker.cpu}vCPU</li>
-                            <li>　- tasks.max：min(${document.getElementById('totalPartitions').value}, ${results.broker.pods * results.broker.cpu}) = ${results.mm2.tasksMax}</li>
                             <li><strong>CPU設定：</strong></li>
-                            <li>　- タスク数に基づく基本CPU：max(2, ceil(${results.mm2.tasksMax} ÷ ${results.mm2.workersPerInstance})) = ${Math.max(2, Math.ceil(results.mm2.tasksMax / results.mm2.workersPerInstance))}vCPU</li>
+                            <li>　- 基本CPU/ワーカー：2vCPU</li>
                             ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+1vCPU</li>' : ''}
                             ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+1vCPU</li>' : ''}
-                            <li>　- 合計CPU：${results.mm2.cpu}vCPU/pod</li>
+                            <li>　- ワーカー当たりCPU：${results.mm2.cpuPerWorker}vCPU</li>
+                            <li>　- MM2総CPU数：${results.mm2.totalWorkers}ワーカー × ${results.mm2.cpuPerWorker}vCPU = ${results.mm2.totalCPU}vCPU</li>
+                            <li><strong>tasks.max計算：</strong></li>
+                            <li>　- 複製対象パーティション数：${document.getElementById('totalPartitions').value}</li>
+                            <li>　- MM2利用可能総CPU数：${results.mm2.totalCPU}vCPU</li>
+                            <li>　- tasks.max：min(${document.getElementById('totalPartitions').value}, ${results.mm2.totalCPU}) = ${results.mm2.tasksMax}</li>
                             <li><strong>メモリ設定：</strong></li>
-                            <li>　- CPU当たり配分：${results.mm2.cpu}vCPU × 0.5GB = ${Math.round(results.mm2.cpu * 0.5 * 10) / 10}GB</li>
-                            <li>　- 最小保証：max(2GB, ${Math.round(results.mm2.cpu * 0.5 * 10) / 10}GB) = ${results.mm2.memory}GB/pod</li>
+                            <li>　- CPU当たり配分：${results.mm2.cpuPerWorker}vCPU × 0.5GB = ${Math.round(results.mm2.cpuPerWorker * 0.5 * 10) / 10}GB</li>
+                            <li>　- 最小保証：max(2GB, ${Math.round(results.mm2.cpuPerWorker * 0.5 * 10) / 10}GB) = ${results.mm2.memory}GB/pod</li>
                         </ul>
                     </div>
                 </div>
