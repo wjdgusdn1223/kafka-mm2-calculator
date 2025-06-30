@@ -532,14 +532,15 @@
                                 <li>例：ソース10パーティション、8CPUコアの場合 → tasks.max = 8</li>
                             </ul>
                         </li>
-                        <li><strong>CPU：</strong> 
+                        <li><strong>CPU（処理量基準計算）：</strong> 
                             <ul>
-                                <li>基本：ワーカー当たり1〜2 vCPU</li>
-                                <li>高負荷環境：各ワーカー当たり4 vCPU以上</li>
-                                <li>プロデューサー・コンシューマー両方の処理負荷を考慮</li>
+                                <li>p値：同一DC内ではTLS・圧縮設定に応じて6〜15 MB/s per vCPU</li>
+                                <li>必要CPU = ceil(処理量 ÷ (p値 × 0.6安全率))</li>
+                                <li>最小2vCPU保証、ワーカー数で分配してワーカー当たりCPUを決定</li>
+                                <li>従来の固定値(2+圧縮+TLS)から実処理量基準計算に変更</li>
                             </ul>
                         </li>
-                        <li><strong>メモリ：</strong> JVMヒープ1〜4GB程度、バッファリングを考慮してCPU当たり0.5GB配分が目安</li>
+                        <li><strong>メモリ：</strong> AWS MSK Connect MCU基準で4GB/vCPU（最小2GB）</li>
                     </ul>
                 </div>
             </div>
@@ -555,7 +556,15 @@
                         ※ 双方向ミラーリングの場合は入力値を2倍にして計算
                     </div>
 
-                    <h4>統合リソース制約によるブローカー数計算</h4>
+                    <h4>Kafkaコントローラー（KRaft）計算式</h4>
+                    <div class="formula">
+                        <strong>Pod数：</strong> 3台（過半数合意のため奇数推奨）
+                        <strong>CPU：</strong> 4 vCPU/pod（メタデータ管理に十分な処理能力）
+                        <strong>メモリ：</strong> 4GB/pod（JVMヒープ1GB + OS用余裕）
+                        <strong>ストレージ：</strong> 64GB SSD/pod（メタデータログ専用高速ディスク）
+                    </div>
+
+                    <h4>Kafkaブローカー計算式</h4>
                     <div class="formula">
                         <strong>1. p値（vCPU当たり処理能力）：</strong>
                         p = 20 MB/s (基本値)
@@ -574,48 +583,47 @@
                         <strong>4. ブローカー当たりCPU：</strong>
                         必要CPU = ceil((ブローカー当たり処理量 / p値) / 0.6)
                         最終CPU = max(4vCPU, 必要CPU)
-                    </div>
 
-                    <h4>メモリ計算（精密化）</h4>
-                    <div class="formula">
-                        <strong>ブローカーメモリ：</strong>
+                        <strong>5. ブローカーメモリ：</strong>
                         JVMヒープ = 6GB (固定)
                         + 直接バッファ = JVMヒープ × (TLS10% + 圧縮10%)
                         + ページキャッシュ = (処理量 × キャッシュ分数 × 60) / 1024
                         + OS余裕 = 上記合計 × 10%
                         
                         最終メモリ = max(計算値, 32GB以上推奨)
-                        
-                        <strong>MM2 CPU：</strong>
-                        基本CPU = max(2, ceil(tasks.max ÷ ワーカー数))
-                        + 圧縮使用時 = +1 vCPU
-                        + TLS使用時 = +1 vCPU
-                    </div>
 
-                    <h4>ストレージ容量の計算</h4>
-                    <div class="formula">
+                        <strong>6. ブローカーストレージ：</strong>
                         総必要ストレージ = 日次データ量 × 保管日数 × レプリケーションファクター
                         ブローカー当たり容量 = 総必要ストレージ ÷ ブローカー数
                         実際のPVC容量 = ブローカー当たり容量 ÷ 0.85 (85%使用率制限)
                     </div>
 
-                    <h4>メモリ計算（ページキャッシュ）</h4>
+                    <h4>MirrorMaker2計算式</h4>
                     <div class="formula">
-                        JVMヒープ = 6GB (固定推奨値)
-                        30秒分キャッシュ容量 = (秒間データ量 × 30) ÷ ブローカー数 ÷ (1024²) (GB)
-                        推奨総メモリ = JVMヒープ + 30秒分キャッシュ容量
-                        最終メモリ = max(32GB, 推奨総メモリ)
-                    </div>
+                        <strong>1. MM2ワーカー数：</strong>
+                        単方向：1方向 × 2ワーカー = 2ワーカー
+                        双方向：2方向 × 2ワーカー = 4ワーカー
 
-                    <h4>MM2 tasks.max の計算</h4>
-                    <div class="formula">
-                        MM2ワーカー当たりCPU = 基本2vCPU + 圧縮(+1) + TLS(+1)
-                        MM2総CPU数 = MM2総ワーカー数 × ワーカー当たりCPU
+                        <strong>2. MM2 p値（同一DC内配置基準）：</strong>
+                        基本値：15 MB/s per vCPU（TLS❌、圧縮❌）
+                        TLS使用：10 MB/s per vCPU
+                        圧縮使用：10 MB/s per vCPU  
+                        TLS+圧縮：6 MB/s per vCPU（保守的設定）
+
+                        <strong>3. MM2 CPU計算：</strong>
+                        MM2処理量 = (入力メッセージ/秒 × 平均メッセージサイズKB) / 1024
+                        必要CPU = ceil(MM2処理量 ÷ (p値 × 0.6安全率))
+                        総CPU = max(2vCPU, 必要CPU)
+                        ワーカー当たりCPU = ceil(総CPU ÷ ワーカー数)
+
+                        <strong>4. MM2 tasks.max：</strong>
                         tasks.max = min(複製対象パーティション数, MM2総CPU数)
                         
-                        MM2メモリ = max(2GB, ワーカー当たりCPU × 0.5GB)
-                        
                         ※ CPU1コア当たり1タスクが理想的な並列度
+
+                        <strong>5. MM2メモリ：</strong>
+                        MM2メモリ = max(2GB, ワーカー当たりCPU × 4GB)
+                        ※ AWS MSK Connect MCU基準
                     </div>
                 </div>
             </div>
@@ -771,18 +779,33 @@
             // リソース計算は1つの方向（単方向）基準で行う
             const mm2TotalWorkersPerDirection = mm2WorkersPerInstance; // 単方向基準
             
-            // MM2 워커당 기본 CPU 할당 (압축/TLS 고려)
-            let mm2CPUPerWorker = 2; // 기본값
-            if (compressionEnabled) mm2CPUPerWorker += 1;
-            if (tlsEnabled) mm2CPUPerWorker += 1;
+            // MM2 p値計算（同一DC内配置基準）
+            let mm2PValue = 15; // 基本値：15 MB/s per vCPU（TLS❌、圧縮❌）
+            if (tlsEnabled && compressionEnabled) {
+                mm2PValue = 6; // TLS + 圧縮：5-8 MB/s（保守的に6を採用）
+            } else if (tlsEnabled) {
+                mm2PValue = 10; // TLSのみ：10 MB/s per vCPU
+            } else if (compressionEnabled) {
+                mm2PValue = 10; // 圧縮のみ：10 MB/s per vCPU（TLSと同様のオーバーヘッド）
+            }
             
-            // MM2 총 CPU 수 계산（単方向基準）
-            const mm2TotalCPU = mm2TotalWorkersPerDirection * mm2CPUPerWorker;
+            // MM2が処理すべき実際の処理量（入力値、複製トラフィックは除外）
+            const mm2ProcessingLoad = (messagesPerSecond * avgMessageSize) / 1024; // MB/s
             
-            // tasks.max는 MM2의 총 CPU 수를 기준으로 계산（단방향 기준）
+            // MM2必要総CPU計算（単方向基準、60%安全率適用）
+            const mm2RequiredTotalCPU = Math.ceil(mm2ProcessingLoad / (mm2PValue * 0.6));
+            const mm2MinCPU = 2; // 最小2vCPU保証
+            const mm2TotalCPU = Math.max(mm2MinCPU, mm2RequiredTotalCPU);
+            
+            // ワーカー当たりCPU配分（総CPUをワーカー数で分配）
+            const mm2CPUPerWorker = Math.ceil(mm2TotalCPU / mm2TotalWorkersPerDirection);
+            
+            
+            // tasks.max計算（パーティション数と総CPU数の小さい方）
             const tasksMax = Math.min(totalPartitions, mm2TotalCPU);
             
-            const mm2Memory = Math.max(2, Math.ceil(mm2CPUPerWorker * 0.5)); // ワーカー当たりCPU基준
+            // MM2メモリ計算（4GB/vCPU基準、最小2GB）
+            const mm2Memory = Math.max(2, mm2CPUPerWorker * 4); // AWS MSK Connect MCU基準 // ワーカー当たりCPU基준
 
             // 結果表示
             displayResults({
@@ -834,7 +857,10 @@
                     calculatedMemory,
                     mirroringType,
                     compressionEnabled,
-                    tlsEnabled
+                    tlsEnabled,
+                    mm2PValue,
+                    mm2ProcessingLoad,
+                    mm2RequiredTotalCPU
                 }
             });
         }
@@ -875,60 +901,16 @@
                         <tr><td>クラスター総ストレージ</td><td>${results.broker.totalStorage}</td><td>GB</td></tr>
                     </table>
                     <div class="explanation">
-                        <h5>📋 計算根拠（コンポーネント別）</h5>
-                        
-                        <!-- 基本データ処理量計算 -->
-                        <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
-                            <h6><strong>📊 基本データ処理量計算</strong></h6>
-                            <ul>
-                                <li>入力メッセージ処理量：${document.getElementById('messagesPerSecond').value}メッセージ/秒</li>
-                                <li>平均メッセージサイズ：${document.getElementById('avgMessageSize').value}KB</li>
-                                <li>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリング調整：' + document.getElementById('messagesPerSecond').value + ' × 2 = ' + results.calculations.actualMessagesPerSecond + 'メッセージ/秒' : '単方向のため調整なし：' + results.calculations.actualMessagesPerSecond + 'メッセージ/秒'}</li>
-                                <li>クラスター総処理量：${results.calculations.actualMessagesPerSecond} × ${document.getElementById('avgMessageSize').value}KB = ${Math.round(results.calculations.tCluster)}MB/s</li>
-                                <li>p値（vCPU当たり処理能力）：${Math.round(results.calculations.pValue * 10) / 10}MB/s/vCPU</li>
-                                <li style="font-style: italic; color: #666;">🔍 p値計算：基本20MB/s ${results.calculations.avgMessageSize < 1 ? '× 小型メッセージ(0.5)' : results.calculations.avgMessageSize > 10 ? '× 大型メッセージ(1.5)' : ''} ${results.calculations.tlsEnabled ? '× TLS(0.7)' : ''} ${results.calculations.compressionEnabled ? '× 圧縮(0.6)' : ''}</li>
-                            </ul>
-                        </div>
-                        
-                        <!-- Kafka Controller -->
-                        <div style="margin-bottom: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px;">
-                            <h6><strong>🎛️ Kafka Controller</strong></h6>
-                            <ul>
-                                <li><strong>Pod数：</strong> ${results.controller.pods}個（固定推奨値）</li>
-                                <li><strong>CPU：</strong> ${results.controller.cpu}vCPU/pod（固定値）</li>
-                                <li><strong>メモリ：</strong> ${results.controller.memory}GB/pod（固定値）</li>
-                                <li><strong>ストレージ：</strong> ${results.controller.storage}GB/pod（固定値）</li>
-                                <li style="font-style: italic; color: #666;">※ コントローラーはクラスター管理専用のため軽量リソース</li>
-                            </ul>
-                        </div>
-                        
-                        <!-- Kafka Broker -->
-                        <div style="margin-bottom: 20px; padding: 15px; background: #f3e5f5; border-radius: 5px;">
-                            <h6><strong>🖥️ Kafka Broker</strong></h6>
-                            <ul>
-                                <li><strong>Pod数決定：</strong></li>
-                                <li>　- パーティション制約：ceil((${results.calculations.actualTotalPartitions} × ${document.getElementById('replicationFactor').value}) ÷ 4000) = ${results.calculations.brokersByPartitions}台</li>
-                                <li>　- ネットワーク制約：ceil(${Math.round(results.calculations.tCluster)}MB/s ÷ ${Math.round(results.calculations.capNIC_perBroker)}MB/s) = ${results.calculations.brokersByNIC}台</li>
-                                <li>　- ディスク制約：ceil(${Math.round(results.calculations.tCluster)}MB/s ÷ ${Math.round(results.calculations.capDisk_perBroker)}MB/s) = ${results.calculations.brokersByDisk}台</li>
-                                <li>　- <strong>最終決定：</strong> max(最小3台, ${results.calculations.brokersByPartitions}, ${results.calculations.brokersByNIC}, ${results.calculations.brokersByDisk}) = ${results.broker.pods}台</li>
-                                <li>　- <strong>主要ボトルネック：</strong> ${results.calculations.bottleneckSource === 'partitions' ? 'パーティション数' : results.calculations.bottleneckSource === 'network' ? 'ネットワーク帯域幅' : 'ディスクI/O'}</li>
-                                <li><strong>CPU計算：</strong></li>
-                                <li>　- ブローカー当たり実処理量：${Math.round(results.calculations.tBroker * 10) / 10}MB/s</li>
-                                <li>　- 必要vCPU：ceil((${Math.round(results.calculations.tBroker * 10) / 10} ÷ ${Math.round(results.calculations.pValue * 10) / 10}) ÷ 0.6) = ${Math.ceil(results.calculations.tBroker / (results.calculations.pValue * 0.6))}vCPU</li>
-                                <li>　- <strong>最終CPU：</strong> max(4vCPU, ${Math.ceil(results.calculations.tBroker / (results.calculations.pValue * 0.6))}vCPU) = ${results.broker.cpu}vCPU/pod</li>
-                                <li><strong>メモリ計算：</strong></li>
-                                <li>　- JVMヒープ：${results.calculations.jvmHeap}GB（固定）</li>
-                                <li>　- 直接バッファ：${Math.round(results.calculations.directBufferOverhead * 10) / 10}GB ${results.calculations.tlsEnabled || results.calculations.compressionEnabled ? '(TLS/圧縮各10%)' : ''}</li>
-                                <li>　- ページキャッシュ：${Math.round(results.calculations.requiredPageCache * 10) / 10}GB（${results.calculations.cacheMinutes}分 × ${Math.round(results.calculations.tBroker * 10) / 10}MB/s）</li>
-                                <li>　- OS余裕：${Math.round(results.calculations.baseMemory * 0.1 * 10) / 10}GB（10%）</li>
-                                <li>　- <strong>最終メモリ：</strong> max(${results.calculations.calculatedMemory}GB, 32GB以上推奨) = ${results.broker.memory}GB/pod</li>
-                                <li><strong>ストレージ計算：</strong></li>
-                                <li>　- 日次データ量：${Math.round(results.calculations.dailyDataGB)}GB/日</li>
-                                <li>　- 保管期間考慮：${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 = ${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value))}GB</li>
-                                <li>　- レプリケーション：${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value))}GB × ${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB</li>
-                                <li>　- <strong>Pod当たり：</strong> ${Math.round(results.calculations.totalStorageGB / results.broker.pods)}GB ÷ 0.85 = ${results.broker.storage}GB/pod</li>
-                            </ul>
-                        </div>
+                        <h5>📋 計算根拠</h5>
+                        <ul>
+                            <li><strong>基本処理量：</strong> ${results.calculations.actualMessagesPerSecond}メッセージ/秒 × ${document.getElementById('avgMessageSize').value}KB = ${Math.round(results.calculations.tCluster)}MB/s${results.calculations.mirroringType === 'bidirectional' ? ' (双方向のため入力値×2)' : ''}</li>
+                            <li><strong>p値（処理能力）：</strong> ${Math.round(results.calculations.pValue * 10) / 10}MB/s/vCPU ${results.calculations.avgMessageSize < 1 ? '(小型メッセージ調整)' : results.calculations.avgMessageSize > 10 ? '(大型メッセージ調整)' : ''} ${results.calculations.tlsEnabled ? '(TLS調整)' : ''} ${results.calculations.compressionEnabled ? '(圧縮調整)' : ''}</li>
+                            <li><strong>Pod数決定：</strong> パーティション制約${results.calculations.brokersByPartitions}台、ネットワーク制約${results.calculations.brokersByNIC}台、ディスク制約${results.calculations.brokersByDisk}台 → <strong>最大値${results.broker.pods}台採用</strong></li>
+                            <li><strong>主要ボトルネック：</strong> ${results.calculations.bottleneckSource === 'partitions' ? 'パーティション数制約' : results.calculations.bottleneckSource === 'network' ? 'ネットワーク帯域幅制約' : 'ディスクI/O制約'}</li>
+                            <li><strong>CPU計算：</strong> ブローカー当たり${Math.round(results.calculations.tBroker * 10) / 10}MB/s ÷ ${Math.round(results.calculations.pValue * 10) / 10}MB/s/vCPU ÷ 0.6(安全率) = ${Math.ceil(results.calculations.tBroker / (results.calculations.pValue * 0.6))}vCPU → 最低4vCPU適用で${results.broker.cpu}vCPU</li>
+                            <li><strong>メモリ計算：</strong> JVMヒープ${results.calculations.jvmHeap}GB + 直接バッファ${Math.round(results.calculations.directBufferOverhead * 10) / 10}GB + ページキャッシュ${Math.round(results.calculations.requiredPageCache * 10) / 10}GB + OS余裕${Math.round(results.calculations.baseMemory * 0.1 * 10) / 10}GB = ${results.calculations.calculatedMemory}GB → 最低32GB適用で${results.broker.memory}GB</li>
+                            <li><strong>ストレージ計算：</strong> 日次${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 × RF${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB → ブローカー当たり${Math.round(results.calculations.totalStorageGB / results.broker.pods)}GB ÷ 0.85(使用率) = ${results.broker.storage}GB</li>
+                        </ul>
                     </div>
                 </div>
 
@@ -947,28 +929,17 @@
                     </table>
                     <div class="explanation">
                         <h5>📋 計算根拠</h5>
-                        
-                        <!-- MirrorMaker2 -->
-                        <div style="margin-bottom: 20px; padding: 15px; background: #fff3e0; border-radius: 5px;">
-                            <h6><strong>🔄 MirrorMaker2</strong></h6>
-                            <ul>
-                                <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（Blue→Green、Green→Blue）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
-                                <li><strong>リソース計算基準：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向でも各方向は独立動作のため、単方向基準でリソース計算' : '単方向なので直接計算'}</li>
-                                <li><strong>Pod数：</strong> ${results.mm2.workersPerInstance}個/方向（高可用性のため各インスタンスに2つのワーカー）</li>
-                                <li><strong>CPU計算：</strong></li>
-                                <li>　- 基本CPU/ワーカー：2vCPU</li>
-                                ${results.calculations.compressionEnabled ? '<li>　- 圧縮処理追加：+1vCPU</li>' : ''}
-                                ${results.calculations.tlsEnabled ? '<li>　- TLS暗号化追加：+1vCPU</li>' : ''}
-                                <li>　- <strong>ワーカー当たりCPU：</strong> ${results.mm2.cpuPerWorker}vCPU</li>
-                                <li><strong>tasks.max計算：</strong></li>
-                                <li>　- 複製対象パーティション数：${document.getElementById('totalPartitions').value}</li>
-                                <li>　- MM2総CPU数（方向当たり）：${results.mm2.totalWorkersPerDirection} × ${results.mm2.cpuPerWorker} = ${results.mm2.totalCPU}vCPU</li>
-                                <li>　- <strong>tasks.max：</strong> min(${document.getElementById('totalPartitions').value}, ${results.mm2.totalCPU}) = ${results.mm2.tasksMax}</li>
-                                <li><strong>メモリ計算：</strong></li>
-                                <li>　- CPU当たり配分：${results.mm2.cpuPerWorker}vCPU × 0.5GB = ${Math.round(results.mm2.cpuPerWorker * 0.5 * 10) / 10}GB</li>
-                                <li>　- <strong>最終メモリ：</strong> max(2GB, ${Math.round(results.mm2.cpuPerWorker * 0.5 * 10) / 10}GB) = ${results.mm2.memory}GB/pod</li>
-                            </ul>
-                        </div>
+                        <ul>
+                            <li><strong>インスタンス数：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2つのMM2インスタンス（Blue→Green、Green→Blue）' : '単方向ミラーリングのため1つのMM2インスタンス'}</li>
+                            <li><strong>リソース計算基準：</strong> ${results.calculations.mirroringType === 'bidirectional' ? '双方向でも各方向は独立動作のため、単方向基準でリソース計算' : '単方向なので直接計算'}</li>
+                            <li><strong>Pod数：</strong> ${results.mm2.workersPerInstance}個/方向（高可用性のため各インスタンスに2つのワーカー）</li>
+                            <li><strong>処理量基準計算：</strong> MM2処理量${Math.round(results.calculations.mm2ProcessingLoad * 10) / 10}MB/s（入力値、複製トラフィック除外）</li>
+                            <li><strong>MM2 p値：</strong> ${Math.round(results.calculations.mm2PValue * 10) / 10}MB/s/vCPU${results.calculations.tlsEnabled && results.calculations.compressionEnabled ? '（TLS+圧縮）' : results.calculations.tlsEnabled ? '（TLS使用）' : results.calculations.compressionEnabled ? '（圧縮使用）' : '（標準）'}</li>
+                            <li><strong>CPU計算：</strong> ceil(${Math.round(results.calculations.mm2ProcessingLoad * 10) / 10}MB/s ÷ (${Math.round(results.calculations.mm2PValue * 10) / 10}MB/s/vCPU × 0.6)) = ${results.calculations.mm2RequiredTotalCPU}vCPU → 最小2vCPU適用で${results.mm2.totalCPU}vCPU総計</li>
+                            <li><strong>ワーカー当たりCPU：</strong> ${results.mm2.totalCPU}vCPU ÷ ${results.mm2.workersPerInstance}ワーカー = ${results.mm2.cpuPerWorker}vCPU/ワーカー</li>
+                            <li><strong>tasks.max計算：</strong> min(複製パーティション数${document.getElementById('totalPartitions').value}, MM2総CPU数${results.mm2.totalCPU}) = ${results.mm2.tasksMax}</li>
+                            <li><strong>メモリ計算：</strong> max(2GB, ${results.mm2.cpuPerWorker}vCPU × 4GB) = ${results.mm2.memory}GB/ワーカー（AWS MSK Connect MCU基準）</li>
+                        </ul>
                     </div>
                 </div>
 
