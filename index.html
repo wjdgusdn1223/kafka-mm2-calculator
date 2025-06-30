@@ -370,6 +370,33 @@
                         </select>
                         <small>クライアント-ブローカー間とブローカー間通信のTLS暗号化。有効にするとブローカーとMM2のCPU使用量が増加します。</small>
                     </div>
+
+                    <details class="form-group">
+                        <summary>🔧 高度なハードウェア設定 (OpenShiftクラスター安全上限値)</summary>
+                        <div style="margin-top: 15px;">
+                            <div class="form-group">
+                                <label for="nicBandwidth">ネットワーク帯域幅 (Gbps):</label>
+                                <input type="number" id="nicBandwidth" name="nicBandwidth" value="25" min="1" max="100">
+                                <small>ブローカーノードのNIC帯域幅。OpenShift標準: 25GbE</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="diskThroughput">ディスク処理量 (MB/s):</label>
+                                <input type="number" id="diskThroughput" name="diskThroughput" value="3000" min="500" max="10000">
+                                <small>ブローカーノードのストレージ処理量。OpenShift推奨: NVMe 3GB/s</small>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="cacheMinutes">ページキャッシュ時間 (分):</label>
+                                <input type="number" id="cacheMinutes" name="cacheMinutes" value="5" min="1" max="60">
+                                <small>コンシューマーが最大何分後までメモリから読むか設定。基本5分</small>
+                            </div>
+                            
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                                ※ ブローカーは別々のノードに配置される前提で計算します。実測後にこれらの値を調整してください。
+                            </p>
+                        </div>
+                    </details>
                 </div>
 
                 <div class="form-section">
@@ -668,43 +695,85 @@
             const controllerMemory = 4; // GB per pod
             const controllerStorage = 64; // GB per pod
 
-            // ブローカー計算
+            // ブローカー計算（統合リソース制約ベース）
+            
+            // 1. p値計算（vCPU当たり処理能力）
+            let pValue = 20; // ベース値：20 MB/s per vCPU
+            if (avgMessageSize < 1) pValue *= 0.5;      // 小型メッセージ（<1KB）
+            else if (avgMessageSize > 10) pValue *= 1.5; // 大型メッセージ（>10KB）
+            if (tlsEnabled) pValue *= 0.7;              // TLS暗号化オーバーヘッド
+            if (compressionEnabled) pValue *= 0.6;       // 圧縮オーバーヘッド
+            
+            // 2. 全体処理量
+            const tCluster = bytesPerSecond / 1024 / 1024; // MB/s
+            
+            // 3. ハードウェア安全上限値設定
+            const nicBandwidthGbps = parseInt(document.getElementById('nicBandwidth').value) || 25;
+            const diskThroughputMBps = parseInt(document.getElementById('diskThroughput').value) || 3000;
+            
+            // 4. 各制約別必要ブローカー数
             const brokersByPartitions = Math.ceil((actualTotalPartitions * replicationFactor) / 4000);
             
-            // 改善されたスループット計算：3ノード・RF=3・2消費グループで800MB/s理論値、80%で640MB/s実用値を基準
-            // この基準から各ブローカーの実効スループットを約213MB/s (640/3) と推定
-            const brokerThroughputMBps = 213; // MB/s per broker (実測ベース)
-            const safetyFactor = 0.8; // 80%安全率
-            const effectiveThroughputPerBroker = brokerThroughputMBps * safetyFactor; // 約170MB/s
+            // ブローカー当たり安全処理容量計算（1ブローカー=1ノード前提）
+            const capNIC_perBroker = (nicBandwidthGbps * 125 * 0.8) / (actualConsumerGroups + replicationFactor - 1);
+            const capDisk_perBroker = (diskThroughputMBps * 0.7) / replicationFactor;
             
-            const brokersByThroughput = Math.ceil((bytesPerSecond / 1024 / 1024) / effectiveThroughputPerBroker);
-            const brokerPods = Math.max(3, Math.max(brokersByPartitions, brokersByThroughput)); // 最小3台
+            const brokersByNIC = Math.ceil(tCluster / capNIC_perBroker);
+            const brokersByDisk = Math.ceil(tCluster / capDisk_perBroker);
+            
+            // 5. 最終ブローカー数（最も制限的な条件 + 最小3台）
+            const brokerPods = Math.max(3, Math.max(brokersByPartitions, brokersByNIC, brokersByDisk));
+            
+            // 6. ブローカー当たり実際CPU計算
+            const tBroker = tCluster / brokerPods;
+            let brokerCPU = Math.max(4, Math.ceil(tBroker / (pValue * 0.6))); // 最小4vCPU
+            
+            // 7. 主要ボトルネック識別
+            const bottleneckSource = 
+                brokersByPartitions >= Math.max(brokersByNIC, brokersByDisk) ? 'partitions' :
+                brokersByNIC >= brokersByDisk ? 'network' : 'disk';
 
-            let brokerCPU = 8; // base vCPU per broker
-            if (compressionEnabled) brokerCPU += 4;
-            if (tlsEnabled) brokerCPU += 4;
-
-            const cachingMemoryGB = Math.max(2, (bytesPerSecond * 30) / (1024 * 1024 * 1024) / brokerPods); // 30秒分キャッシュ
-            const brokerMemory = Math.max(32, 6 + cachingMemoryGB); // JVMヒープ6GB + キャッシュ用メモリ
+            // ブローカーメモリ計算（改善された方式）
+            const cacheMinutes = parseInt(document.getElementById('cacheMinutes').value) || 5;
+            
+            // 1. JVMヒープ: 6GB（固定）
+            const jvmHeap = 6;
+            
+            // 2. 直接バッファオーバーヘッド（TLS/圧縮各10%）
+            let directBufferOverhead = 0;
+            if (tlsEnabled) directBufferOverhead += jvmHeap * 0.1; // +0.6GB
+            if (compressionEnabled) directBufferOverhead += jvmHeap * 0.1; // +0.6GB
+            
+            // 3. ページキャッシュ（設定分数 × ブローカー当たり書込量）
+            const requiredPageCache = Math.max(2, (tBroker * cacheMinutes * 60) / 1024); // GB
+            
+            // 4. OS余裕（10%追加）
+            const baseMemory = jvmHeap + directBufferOverhead + requiredPageCache;
+            const calculatedMemory = Math.ceil(baseMemory * 1.1);
+            
+            // 5. プロダクション推奨値考慮（32GB以上）
+            const brokerMemory = Math.max(calculatedMemory, 32);
             const brokerStoragePerPod = Math.ceil((totalStorageGB / brokerPods) / 0.85); // 85%利用率考慮
 
-            // MM2計算
+            // MM2計算（双方向でも単方向基準でリソース計算）
             const mm2Instances = mirroringType === 'bidirectional' ? 2 : 1;
             const mm2WorkersPerInstance = 2; // 推奨値
-            const mm2TotalWorkers = mm2Instances * mm2WorkersPerInstance;
+            // 注意：双方向の場合、2つの独立した単方向同期として動作
+            // リソース計算は1つの方向（単方向）基準で行う
+            const mm2TotalWorkersPerDirection = mm2WorkersPerInstance; // 単方向基準
             
             // MM2 워커당 기본 CPU 할당 (압축/TLS 고려)
             let mm2CPUPerWorker = 2; // 기본값
             if (compressionEnabled) mm2CPUPerWorker += 1;
             if (tlsEnabled) mm2CPUPerWorker += 1;
             
-            // MM2 총 CPU 수 계산
-            const mm2TotalCPU = mm2TotalWorkers * mm2CPUPerWorker;
+            // MM2 총 CPU 수 계산（単方向基準）
+            const mm2TotalCPU = mm2TotalWorkersPerDirection * mm2CPUPerWorker;
             
-            // tasks.max는 MM2의 총 CPU 수를 기준으로 계산
+            // tasks.max는 MM2의 총 CPU 수를 기준으로 계산（단방향 기준）
             const tasksMax = Math.min(totalPartitions, mm2TotalCPU);
             
-            const mm2Memory = Math.max(2, Math.ceil(mm2CPUPerWorker * 0.5)); // 워커당 CPU 기반
+            const mm2Memory = Math.max(2, Math.ceil(mm2CPUPerWorker * 0.5)); // ワーカー当たりCPU基준
 
             // 結果表示
             displayResults({
@@ -724,7 +793,7 @@
                 mm2: {
                     instances: mm2Instances,
                     workersPerInstance: mm2WorkersPerInstance,
-                    totalWorkers: mm2TotalWorkers,
+                    totalWorkersPerDirection: mm2TotalWorkersPerDirection,
                     cpuPerWorker: mm2CPUPerWorker,
                     totalCPU: mm2TotalCPU,
                     memory: mm2Memory,
@@ -737,8 +806,23 @@
                     bytesPerSecond,
                     dailyDataGB,
                     totalStorageGB,
+                    pValue,
+                    tCluster,
+                    tBroker,
                     brokersByPartitions,
-                    brokersByThroughput,
+                    brokersByNIC,
+                    brokersByDisk,
+                    bottleneckSource,
+                    capNIC_perBroker,
+                    capDisk_perBroker,
+                    nicBandwidthGbps,
+                    diskThroughputMBps,
+                    cacheMinutes,
+                    jvmHeap,
+                    directBufferOverhead,
+                    requiredPageCache,
+                    baseMemory,
+                    calculatedMemory,
                     mirroringType,
                     compressionEnabled,
                     tlsEnabled
