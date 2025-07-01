@@ -573,7 +573,8 @@
                     <ul>
                         <li><strong>Pod数：</strong> 
                             <ul>
-                                <li><strong>3つの制約を比較：</strong> パーティション制約、ネットワーク制約、ディスクI/O制約の最大値を採用</li>
+                                <li><strong>最小3台保証：</strong> 高可用性・レプリケーション・クォーラム形成のため絶対最小構成</li>
+                                <li><strong>4つの制約を比較：</strong> 最小台数、パーティション制約、ネットワーク制約、ディスクI/O制約の最大値を採用</li>
                                 <li><strong>パーティション制約：</strong> 
                                     <ul>
                                         <li>1ブローカー当たり最大4,000パーティション推奨</li>
@@ -631,7 +632,15 @@
                                         <li><strong>運用余裕:</strong> メンテナンス、ローリングアップデート時の安全性</li>
                                     </ul>
                                 </li>
-                                <li><strong>実装方法:</strong> 処理量 ÷ (p値 × 0.6) = 必要vCPU数（切り上げ）</li>
+                                <li><strong>最小4vCPU保証:</strong>
+                                    <ul>
+                                        <li><strong>基本システム需要:</strong> JVMガベージコレクション、OS・カーネル処理、システム監視</li>
+                                        <li><strong>Kafka基本機能:</strong> メタデータ同期、ヘルスチェック、内部管理タスク</li>
+                                        <li><strong>緊急時対応:</strong> 突発的な負荷増加、パーティション移行、リバランス処理</li>
+                                        <li><strong>運用安定性:</strong> 2vCPU以下では基本機能でさえ不安定動作を確認</li>
+                                    </ul>
+                                </li>
+                                <li><strong>実装方法:</strong> max(4vCPU, ceil(処理量 ÷ (p値 × 0.6))) = 最終CPU数</li>
                             </ul>
                         </li>
                         <li><strong>メモリアーキテクチャ設計：</strong> 
@@ -654,8 +663,17 @@
                                 </li>
                                 <li><strong>ページキャッシュ設計理論:</strong>
                                     <ul>
-                                        <li><strong>計算式:</strong> (ブローカー当たり処理量MB/s × 300秒) ÷ 1024 = キャッシュサイズGB</li>
-                                        <li><strong>5分キャッシュ根拠:</strong> コンシューマーの遅延読み取りパターン分析</li>
+                                        <li><strong>基本計算式:</strong> (ブローカー当たり処理量MB/s × 300秒) ÷ 1024 = 基本キャッシュサイズGB</li>
+                                        <li><strong>5分キャッシュ根拠:</strong> コンシューマーの遅延読み取りパターン分析（平均遅延2-3分）</li>
+                                        <li><strong>最小2GB保証設定:</strong>
+                                            <ul>
+                                                <li><strong>低負荷時問題:</strong> 計算値が小さすぎる場合（<2GB）の性能劣化防止</li>
+                                                <li><strong>Kafka起動時需要:</strong> ブートストラップ・初期化・メタデータ読み込みで約1.5GB必要</li>
+                                                <li><strong>運用安定性:</strong> 突発的なトラフィック増加やcompaction処理時のバッファ確保</li>
+                                                <li><strong>実測データ:</strong> 2GB未満では頻繁なディスクI/Oによる性能低下を確認</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong>適用ロジック:</strong> max(2GB, 基本計算値) = 最終ページキャッシュサイズ</li>
                                         <li><strong>効果:</strong> 最近書き込みデータの高速読み取り（Zero-copy最適化）</li>
                                         <li><strong>OSファイルシステムキャッシュ:</strong> Linuxカーネルの自動メモリ管理活用</li>
                                     </ul>
@@ -737,7 +755,7 @@
                                         <li>安全率適用: 基本必要量 ÷ 0.6（60%利用率制限）</li>
                                         <li>切り上げ処理: ceil()で整数vCPUに調整</li>
                                         <li>Pod分配: 総CPU ÷ ワーカー数 = Pod当たりCPU</li>
-                                        <li>最小保証: max(2vCPU, 計算値) でPod当たり最小2vCPU確保</li>
+                                        <li><strong>最小2vCPU保証:</strong> MM2基本動作（Kafka Connect + MM2コネクター）に必要な最小リソース</li>
                                     </ul>
                                 </li>
                                 <li><strong>設計思想変更:</strong> 固定加算方式から実処理量比例方式へ移行（より正確な算定）</li>
@@ -1094,7 +1112,8 @@
             if (compressionEnabled) directBufferOverhead += jvmHeap * 0.1; // +0.6GB
             
             // 3. ページキャッシュ（設定分数 × ブローカー当たり書込量）
-            const requiredPageCache = Math.max(2, (tBroker * cacheMinutes * 60) / 1024); // GB
+            const calculatedPageCache = (tBroker * cacheMinutes * 60) / 1024; // GB
+            const requiredPageCache = Math.max(2, calculatedPageCache); // 最小2GB保証
             
             // 4. OS余裕（10%追加）
             const baseMemory = jvmHeap + directBufferOverhead + requiredPageCache;
@@ -1211,6 +1230,7 @@
                     cacheMinutes,
                     jvmHeap,
                     directBufferOverhead,
+                    calculatedPageCache,
                     requiredPageCache,
                     baseMemory,
                     calculatedMemory,
@@ -1307,7 +1327,8 @@
                                 JVMヒープ: ${results.calculations.jvmHeap}GB (固定推奨値)<br>
                                 ${results.calculations.tlsEnabled ? 'TLS直接バッファ: ' + results.calculations.jvmHeap + 'GB × 10% = ' + Math.round(results.calculations.jvmHeap * 0.1 * 10) / 10 + 'GB<br>' : ''}
                                 ${results.calculations.compressionEnabled ? '圧縮直接バッファ: ' + results.calculations.jvmHeap + 'GB × 10% = ' + Math.round(results.calculations.jvmHeap * 0.1 * 10) / 10 + 'GB<br>' : ''}
-                                ページキャッシュ: ${Math.round(results.calculations.tBroker * 100) / 100}MB/s × ${results.calculations.cacheMinutes}分 × 60秒 ÷ 1024 = ${Math.round(results.calculations.requiredPageCache * 100) / 100}GB<br>
+                                ページキャッシュ計算: ${Math.round(results.calculations.tBroker * 100) / 100}MB/s × ${results.calculations.cacheMinutes}分 × 60秒 ÷ 1024 = ${Math.round(results.calculations.calculatedPageCache * 100) / 100}GB<br>
+                                ページキャッシュ適用: max(2GB, ${Math.round(results.calculations.calculatedPageCache * 100) / 100}GB) = ${Math.round(results.calculations.requiredPageCache * 100) / 100}GB (最小2GB保証)<br>
                                 小計: ${results.calculations.jvmHeap}GB + ${Math.round(results.calculations.directBufferOverhead * 10) / 10}GB + ${Math.round(results.calculations.requiredPageCache * 10) / 10}GB = ${Math.round(results.calculations.baseMemory * 10) / 10}GB<br>
                                 OS余裕: ${Math.round(results.calculations.baseMemory * 10) / 10}GB × 10% = ${Math.round(results.calculations.baseMemory * 0.1 * 10) / 10}GB<br>
                                 計算値: ${Math.round(results.calculations.baseMemory * 10) / 10}GB + ${Math.round(results.calculations.baseMemory * 0.1 * 10) / 10}GB = ${results.calculations.calculatedMemory}GB<br>
