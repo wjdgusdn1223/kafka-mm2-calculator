@@ -1183,8 +1183,7 @@
                         <h5>📋 計算根拠</h5>
                         <ul>
                             <li><strong>📊 基本処理量計算：</strong><br>
-                                ${document.getElementById('messagesPerSecond').value}メッセージ/秒 × ${document.getElementById('avgMessageSize').value}KB × 1024 = ${Math.round(results.calculations.bytesPerSecond / 1024)}KB/秒<br>
-                                → ${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/秒${results.calculations.mirroringType === 'bidirectional' ? '<br>→ 双方向ミラーリング: ' + Math.round(results.calculations.bytesPerSecond / 1024 / 1024) + 'MB/秒 × 2 = ' + Math.round(results.calculations.tCluster) + 'MB/秒' : ''}
+                                ${results.calculations.mirroringType === 'bidirectional' ? '入力値: ' + document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB × 1024 = ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) * 1024 / 1024) + 'MB/秒<br>→ 双方向ミラーリング: ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) * 1024 / 1024) + 'MB/秒 × 2 = ' + Math.round(results.calculations.tCluster) + 'MB/秒' : document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB × 1024 = ' + Math.round(results.calculations.bytesPerSecond / 1024) + 'KB/秒<br>→ ' + Math.round(results.calculations.bytesPerSecond / 1024 / 1024) + 'MB/秒'}
                             </li>
                             <li><strong>⚙️ p値（vCPU処理能力）計算：</strong><br>
                                 ベース値: 20 MB/s/vCPU<br>
@@ -1226,7 +1225,7 @@
                                 ※ 高負荷プロダクション環境では32-64GB推奨
                             </li>
                             <li><strong>💽 ストレージ計算プロセス：</strong><br>
-                                日次データ量: ${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s × 86,400秒 ÷ 1,024 = ${Math.round(results.calculations.dailyDataGB * 100) / 100}GB/日<br>
+                                日次データ量: ${Math.round(results.calculations.tCluster)}MB/s × 86,400秒 ÷ 1,024 = ${Math.round(results.calculations.dailyDataGB * 100) / 100}GB/日<br>
                                 保持期間データ: ${Math.round(results.calculations.dailyDataGB * 100) / 100}GB/日 × ${document.getElementById('retentionDays').value}日 = ${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value) * 100) / 100}GB<br>
                                 レプリケーション: ${Math.round(results.calculations.dailyDataGB * parseInt(document.getElementById('retentionDays').value) * 100) / 100}GB × RF${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB<br>
                                 ブローカー当たり: ${Math.round(results.calculations.totalStorageGB)}GB ÷ ${results.broker.pods}台 = ${Math.round(results.calculations.totalStorageGB / results.broker.pods)}GB<br>
@@ -1305,7 +1304,7 @@
                         <tr><td>メッセージ処理量</td><td>${document.getElementById('messagesPerSecond').value}/秒</td><td>${results.calculations.actualMessagesPerSecond}/秒</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
                         <tr><td>総パーティション数</td><td>${document.getElementById('totalPartitions').value}</td><td>${results.calculations.actualTotalPartitions}</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
                         <tr><td>コンシューマーグループ数</td><td>${document.getElementById('consumerGroups').value}</td><td>${results.calculations.actualConsumerGroups}</td><td>MM2を1つのコンシューマーグループとして追加</td></tr>
-                        <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.bytesPerSecond / 1024 / 1024)}MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB</td></tr>
+                        <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.tCluster)}MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB</td></tr>
                         <tr><td>必要総ストレージ</td><td>-</td><td>${Math.round(results.calculations.totalStorageGB)}GB</td><td>${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 × RF${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB</td></tr>
                     </table>
                 </div>
