@@ -405,10 +405,11 @@
                     <div class="form-group">
                         <label for="mirroringType">ミラーリングタイプ</label>
                         <select id="mirroringType" name="mirroringType" required>
-                            <option value="bidirectional">双方向 (Blue ⇄ Green)</option>
                             <option value="unidirectional">単方向 (Blue → Green)</option>
+                            <option value="bidirectional_standby">双方向 Active/Standby (平常時: Blue → Green、障害時: Blue ⇄ Green)</option>
+                            <option value="bidirectional_active">双方向 Active/Active (常時: Blue ⇄ Green)</option>
                         </select>
-                        <small>単方向同期を実施している場合は単方向を選択してください。</small>
+                        <small>Active/Standbyは平常時単方向動作、Active/Activeは常時双方向動作を意味します。</small>
                     </div>
                 </div>
 
@@ -469,6 +470,61 @@
                     <div class="info">
                         <strong>セキュリティとパフォーマンス：</strong><br>
                         TLS暗号化はデータの機密性を保護しますが、暗号化・復号化処理でCPU使用量が大幅に増加します。特にハンドシェイク処理と継続的な暗号化でブローカーとMM2両方のCPU負荷が増加します。TLS使用時はブローカーで+4vCPU、MM2で+1vCPU程度の追加リソースが必要です。
+                    </div>
+
+                    <h4>9. ミラーリングタイプ</h4>
+                    <p>MirrorMaker2の動作モードを指定します。各タイプにより必要なリソースとアーキテクチャが大きく異なります。</p>
+                    
+                    <h5>🔄 単方向 (Blue → Green)</h5>
+                    <div class="info">
+                        <strong>特徴：</strong><br>
+                        • 一方向のみのデータ複製<br>
+                        • 最もシンプルで低コストな構成<br>
+                        • ディザスタリカバリやデータマイグレーション用途
+                    </div>
+                    <div class="formula">
+                        <strong>リソース影響：</strong><br>
+                        • ブローカー処理量：入力値そのまま<br>
+                        • パーティション数：入力値そのまま<br>
+                        • MM2インスタンス：1個
+                    </div>
+
+                    <h5>🔄 双方向 Active/Standby</h5>
+                    <div class="info">
+                        <strong>特徴：</strong><br>
+                        • 平常時は一方向（Blue → Green）のみ動作<br>
+                        • 障害時に逆方向（Green → Blue）が自動活性化<br>
+                        • フェイルオーバー型の高可用性構成<br>
+                        • データ同期の複雑性を最小化
+                    </div>
+                    <div class="formula">
+                        <strong>リソース影響：</strong><br>
+                        • ブローカー処理量：平常時は入力値そのまま<br>
+                        • パーティション数：両クラスターに複製のため2倍<br>
+                        • MM2インスタンス：2個（各方向に1個ずつ準備）
+                    </div>
+
+                    <h5>🔄 双方向 Active/Active</h5>
+                    <div class="info">
+                        <strong>特徴：</strong><br>
+                        • 両方向同時に常時動作（Blue ⇄ Green）<br>
+                        • 両クラスターが同時にプロデューサー・コンシューマーとして動作<br>
+                        • 最大のスループットと可用性を提供<br>
+                        • データ競合解決とメッセージ重複排除が複雑
+                    </div>
+                    <div class="warning">
+                        <strong>リソース影響：</strong><br>
+                        • ブローカー処理量：常時双方向のため2倍<br>
+                        • パーティション数：両クラスターに複製のため2倍<br>
+                        • MM2インスタンス：2個（各方向が常時動作）<br>
+                        • 注意：最も高コストだが最大の性能と可用性
+                    </div>
+
+                    <div class="info">
+                        <strong>💡 選択指針：</strong><br>
+                        • <strong>単方向：</strong> 片方向データ移行、バックアップ、ディザスタリカバリ<br>
+                        • <strong>Active/Standby：</strong> フェイルオーバー型高可用性、リージョン間データ保護<br>
+                        • <strong>Active/Active：</strong> マルチリージョン運用、最大スループット要求、グローバル分散システム
                     </div>
                 </div>
             </div>
@@ -960,9 +1016,21 @@
             const compressionEnabled = document.getElementById('compressionEnabled').value === 'true';
             const tlsEnabled = document.getElementById('tlsEnabled').value === 'true';
 
-            // 双方向ミラーリングの場合の調整
-            const actualMessagesPerSecond = mirroringType === 'bidirectional' ? messagesPerSecond * 2 : messagesPerSecond;
-            const actualTotalPartitions = mirroringType === 'bidirectional' ? totalPartitions * 2 : totalPartitions;
+            // ミラーリングタイプに応じた調整
+            let actualMessagesPerSecond, actualTotalPartitions;
+            if (mirroringType === 'bidirectional_active') {
+                // Active/Active: 常時双方向処理
+                actualMessagesPerSecond = messagesPerSecond * 2;
+                actualTotalPartitions = totalPartitions * 2;
+            } else if (mirroringType === 'bidirectional_standby') {
+                // Active/Standby: 平常時単方向、パーティションは両側に複製
+                actualMessagesPerSecond = messagesPerSecond;
+                actualTotalPartitions = totalPartitions * 2;
+            } else {
+                // 単方向: そのまま
+                actualMessagesPerSecond = messagesPerSecond;
+                actualTotalPartitions = totalPartitions;
+            }
             const actualConsumerGroups = consumerGroups + 1; // MM2を1つのコンシューマーグループとして追加
 
             // 基本計算
@@ -1036,12 +1104,29 @@
             const brokerMemory = calculatedMemory;
             const brokerStoragePerPod = Math.ceil((totalStorageGB / brokerPods) / 0.85); // 85%利用率考慮
 
-            // MM2計算（双方向でも単方向基準でリソース計算）
-            const mm2Instances = mirroringType === 'bidirectional' ? 2 : 1;
-            const mm2WorkersPerInstance = 2; // 推奨値
-            // 注意：双方向の場合、2つの独立した単方向同期として動作
-            // リソース計算は1つの方向（単方向）基準で行う
-            const mm2TotalWorkersPerDirection = mm2WorkersPerInstance; // 単方向基準
+            // MM2インスタンス計算
+            let mm2Instances;
+            if (mirroringType === 'bidirectional_active' || mirroringType === 'bidirectional_standby') {
+                // Active/Active と Active/Standby の両方で2インスタンス必要
+                mm2Instances = 2;
+            } else {
+                // 単方向
+                mm2Instances = 1;
+            }
+            const mm2WorkersPerInstance = 2; // 推奨値（高可用性のため）
+            
+            // 総ワーカー数計算（ミラーリングタイプによって異なる）
+            let mm2TotalWorkersPerDirection;
+            if (mirroringType === 'bidirectional_active') {
+                // Active/Active: 各方向に独立ワーカー、各方向 2ワーカー
+                mm2TotalWorkersPerDirection = mm2WorkersPerInstance;
+            } else if (mirroringType === 'bidirectional_standby') {
+                // Active/Standby: 各方向に独立ワーカー、各方向 2ワーカー（平常時1方向のみ活性）
+                mm2TotalWorkersPerDirection = mm2WorkersPerInstance;
+            } else {
+                // 単方向: 1方向のみ、2ワーカー
+                mm2TotalWorkersPerDirection = mm2WorkersPerInstance;
+            }
             
             // MM2 p値計算（同一DC内配置基準）
             let mm2PValue = 15; // 基本値：15 MB/s per vCPU（TLS❌、圧縮❌）
@@ -1183,7 +1268,7 @@
                         <h5>📋 計算根拠</h5>
                         <ul>
                             <li><strong>📊 基本処理量計算：</strong><br>
-                                ${results.calculations.mirroringType === 'bidirectional' ? '入力値: ' + document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB / 1024 = ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) / 1024) + 'MB/秒<br>→ 双方向ミラーリング: ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) / 1024) + 'MB/秒 × 2 = ' + Math.round(results.calculations.tCluster) + 'MB/秒' : document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB / 1024 = ' + Math.round(results.calculations.bytesPerSecond / 1024) + 'MB/秒<br>→ ' + Math.round(results.calculations.bytesPerSecond / 1024) + 'MB/秒'}
+                                ${results.calculations.mirroringType === 'bidirectional_active' ? '入力値: ' + document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB × 1024 = ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) * 1024 / 1024) + 'MB/秒<br>→ Active/Active双方向: ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) * 1024 / 1024) + 'MB/秒 × 2 = ' + Math.round(results.calculations.tCluster) + 'MB/秒' : results.calculations.mirroringType === 'bidirectional_standby' ? '入力値: ' + document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB × 1024 = ' + Math.round(parseInt(document.getElementById('messagesPerSecond').value) * parseFloat(document.getElementById('avgMessageSize').value) * 1024 / 1024) + 'MB/秒<br>→ Active/Standby: 平常時処理量 = ' + Math.round(results.calculations.tCluster) + 'MB/秒' : document.getElementById('messagesPerSecond').value + 'メッセージ/秒 × ' + document.getElementById('avgMessageSize').value + 'KB × 1024 = ' + Math.round(results.calculations.bytesPerSecond / 1024) + 'KB/秒<br>→ ' + Math.round(results.calculations.bytesPerSecond / 1024 / 1024) + 'MB/秒'}
                             </li>
                             <li><strong>⚙️ p値（vCPU処理能力）計算：</strong><br>
                                 ベース値: 20 MB/s/vCPU<br>
@@ -1193,6 +1278,11 @@
                                 <strong>最終p値: ${Math.round(results.calculations.pValue * 10) / 10} MB/s/vCPU</strong>
                             </li>
                             <li><strong>🏪 ブローカー台数決定プロセス：</strong><br>
+                                <strong>📋 MM2影響分析:</strong><br>
+                                　　入力パーティション数: ${document.getElementById('totalPartitions').value}<br>
+                                　　${results.calculations.mirroringType === 'bidirectional_active' || results.calculations.mirroringType === 'bidirectional_standby' ? 'MM2による調整: ' + document.getElementById('totalPartitions').value + ' × 2 (両側クラスター複製) = ' + results.calculations.actualTotalPartitions + 'パーティション<br>' : 'MM2調整なし: ' + results.calculations.actualTotalPartitions + 'パーティション<br>'}
+                                　　入力コンシューマーグループ数: ${document.getElementById('consumerGroups').value}<br>
+                                　　MM2追加: ${document.getElementById('consumerGroups').value} + 1 (MM2自体) = ${results.calculations.actualConsumerGroups}グループ<br>
                                 <strong>制約1:</strong> パーティション制約<br>
                                 　　(${results.calculations.actualTotalPartitions}パーティション × RF${document.getElementById('replicationFactor').value}) ÷ 4,000 = ${Math.round((results.calculations.actualTotalPartitions * parseInt(document.getElementById('replicationFactor').value)) / 4000 * 100) / 100} → ${results.calculations.brokersByPartitions}台<br>
                                 <strong>制約2:</strong> ネットワーク制約<br>
@@ -1240,7 +1330,7 @@
                     <h4>🔄 MirrorMaker2</h4>
                     <table class="resource-table">
                         <tr><th>リソース</th><th>値</th><th>単位</th></tr>
-                        <tr><td>インスタンス数</td><td>${results.mm2.instances}</td><td>個 (${results.calculations.mirroringType === 'bidirectional' ? '双方向' : '単方向'})</td></tr>
+                        <tr><td>インスタンス数</td><td>${results.mm2.instances}</td><td>個 (${results.calculations.mirroringType === 'bidirectional_active' ? 'Active/Active' : results.calculations.mirroringType === 'bidirectional_standby' ? 'Active/Standby' : '単方向'})</td></tr>
                         <tr><td>ワーカー数/インスタンス</td><td>${results.mm2.workersPerInstance}</td><td>pod/インスタンス</td></tr>
                         <tr><td>総Pod数（方向当たり）</td><td>${results.mm2.workersPerInstance}</td><td>個</td></tr>
                         <tr><td>tasks.max</td><td>${results.mm2.tasksMax}</td><td>個/インスタンス</td></tr>
@@ -1253,15 +1343,17 @@
                         <h5>📋 計算根拠</h5>
                         <ul>
                             <li><strong>🔄 MM2インスタンス構成：</strong><br>
-                                ${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリング: 2インスタンス (Blue→Green + Green→Blue)<br>各方向は独立動作、リソースは単方向基準で計算' : '単方向ミラーリング: 1インスタンス (単一方向)'}
+                                ${results.calculations.mirroringType === 'bidirectional_active' ? 'Active/Active: 2インスタンス (Blue⇄Green 常時双方向)<br>各方向が常時動作、負荷は2倍' : results.calculations.mirroringType === 'bidirectional_standby' ? 'Active/Standby: 2インスタンス (平常時Blue→Green、障害時Green→Blue)<br>平常時単方向動作、パーティションは両側複製' : '単方向: 1インスタンス (Blue→Green)<br>一方向のみの複製動作'}
                             </li>
                             <li><strong>👥 ワーカー配置：</strong><br>
                                 ${results.mm2.workersPerInstance}ワーカー/インスタンス (高可用性のため2台推奨)<br>
                                 総ワーカー数: ${results.mm2.workersPerInstance}個/方向
                             </li>
-                            <li><strong>📊 MM2処理量計算：</strong><br>
-                                入力処理量: ${document.getElementById('messagesPerSecond').value}メッセージ/秒 × ${document.getElementById('avgMessageSize').value}KB ÷ 1024 = ${Math.round(results.calculations.mm2ProcessingLoad * 100) / 100}MB/秒<br>
-                                ※ MM2は入力値のみ処理（複製トラフィック除外）
+                            <li><strong>📊 MM2処理量分析：</strong><br>
+                                <strong>原本データ処理:</strong> ${document.getElementById('messagesPerSecond').value}メッセージ/秒 × ${document.getElementById('avgMessageSize').value}KB ÷ 1024 = ${Math.round(results.calculations.mm2ProcessingLoad * 100) / 100}MB/秒<br>
+                                <strong>処理対象:</strong> MM2は原本データのみ処理（複製済みトラフィックは除外）<br>
+                                ${results.calculations.mirroringType === 'bidirectional_active' ? '<strong>Active/Active特徴:</strong> 両方向同時処理のため、実際にはクラスター全体で2倍の負荷<br>' : results.calculations.mirroringType === 'bidirectional_standby' ? '<strong>Active/Standby特徴:</strong> 平常時は一方向のみ処理、障害時に逆方向も活性<br>' : '<strong>単方向特徴:</strong> 一方向のみの複製処理<br>'}
+                                <strong>リソース計算基準:</strong> 単方向処理量基準（${Math.round(results.calculations.mm2ProcessingLoad * 100) / 100}MB/秒）
                             </li>
                             <li><strong>⚙️ MM2 p値（同一DC内基準）：</strong><br>
                                 ベース値: 15 MB/s/vCPU<br>
@@ -1301,9 +1393,9 @@
                     <h4>📊 計算サマリー</h4>
                     <table class="resource-table">
                         <tr><th>項目</th><th>入力値</th><th>調整後の値</th><th>説明</th></tr>
-                        <tr><td>メッセージ処理量</td><td>${document.getElementById('messagesPerSecond').value}/秒</td><td>${results.calculations.actualMessagesPerSecond}/秒</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
-                        <tr><td>総パーティション数</td><td>${document.getElementById('totalPartitions').value}</td><td>${results.calculations.actualTotalPartitions}</td><td>${results.calculations.mirroringType === 'bidirectional' ? '双方向ミラーリングのため2倍' : '単方向のため変更なし'}</td></tr>
-                        <tr><td>コンシューマーグループ数</td><td>${document.getElementById('consumerGroups').value}</td><td>${results.calculations.actualConsumerGroups}</td><td>MM2を1つのコンシューマーグループとして追加</td></tr>
+                        <tr><td>メッセージ処理量</td><td>${document.getElementById('messagesPerSecond').value}/秒</td><td>${results.calculations.actualMessagesPerSecond}/秒</td><td>${results.calculations.mirroringType === 'bidirectional_active' ? 'Active/Active: 両方向同時処理のためブローカー負荷が2倍に増加' : results.calculations.mirroringType === 'bidirectional_standby' ? 'Active/Standby: 平常時は単方向処理のためブローカー負荷変更なし' : '単方向: 一方向のみのためブローカー負荷変更なし'}</td></tr>
+                        <tr><td>総パーティション数</td><td>${document.getElementById('totalPartitions').value}</td><td>${results.calculations.actualTotalPartitions}</td><td>${results.calculations.mirroringType === 'bidirectional_active' || results.calculations.mirroringType === 'bidirectional_standby' ? '双方向構成: Blue・ Green両クラスターに同じパーティション構成が必要のため2倍' : '単方向: 一方向のみのため変更なし'}</td></tr>
+                        <tr><td>コンシューマーグループ数</td><td>${document.getElementById('consumerGroups').value}</td><td>${results.calculations.actualConsumerGroups}</td><td>MM2がブローカーからデータを読み取るため、追加のコンシューマーグループとしてネットワーク帯域に影響</td></tr>
                         <tr><td>日次データ量</td><td>-</td><td>${Math.round(results.calculations.dailyDataGB)}GB</td><td>${Math.round(results.calculations.tCluster)}MB/s × 86400秒 ÷ 1024 = ${Math.round(results.calculations.dailyDataGB)}GB</td></tr>
                         <tr><td>必要総ストレージ</td><td>-</td><td>${Math.round(results.calculations.totalStorageGB)}GB</td><td>${Math.round(results.calculations.dailyDataGB)}GB × ${document.getElementById('retentionDays').value}日 × RF${document.getElementById('replicationFactor').value} = ${Math.round(results.calculations.totalStorageGB)}GB</td></tr>
                     </table>
