@@ -405,9 +405,9 @@
                     <div class="form-group">
                         <label for="mirroringType">ミラーリングタイプ</label>
                         <select id="mirroringType" name="mirroringType" required>
-                            <option value="unidirectional">単方向 (Blue → Green)</option>
-                            <option value="bidirectional_standby">双方向 Active/Standby (平常時: Blue → Green、障害時: Blue ⇄ Green)</option>
+                            <option value="bidirectional_standby">双方向 Active/Standby (平常時: Blue → Green、障害時: Blue ← Green)</option>
                             <option value="bidirectional_active">双方向 Active/Active (常時: Blue ⇄ Green)</option>
+                            <option value="unidirectional">単方向 (Blue → Green)</option>
                         </select>
                         <small>Active/Standbyは平常時単方向動作、Active/Activeは常時双方向動作を意味します。</small>
                     </div>
