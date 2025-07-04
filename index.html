@@ -372,18 +372,18 @@
                     </div>
 
                     <details class="form-group">
-                        <summary>🔧 高度なハードウェア設定 (OpenShiftクラスター安全上限値)</summary>
+                        <summary>🔧 高度なハードウェア設定 (クラスター安全上限値)</summary>
                         <div style="margin-top: 15px;">
                             <div class="form-group">
                                 <label for="nicBandwidth">ネットワーク帯域幅 (Gbps):</label>
-                                <input type="number" id="nicBandwidth" name="nicBandwidth" value="25" min="1" max="100">
-                                <small>ブローカーノードのNIC帯域幅。OpenShift標準: 25GbE</small>
+                                <input type="number" id="nicBandwidth" name="nicBandwidth" value="20" min="1" max="100">
+                                <small>ブローカーノードのNIC帯域幅。一般的標準：20GbE</small>
                             </div>
                             
                             <div class="form-group">
                                 <label for="diskThroughput">ディスク処理量 (MB/s):</label>
-                                <input type="number" id="diskThroughput" name="diskThroughput" value="3000" min="500" max="10000">
-                                <small>ブローカーノードのストレージ処理量。OpenShift推奨: NVMe 3GB/s</small>
+                                <input type="number" id="diskThroughput" name="diskThroughput" value="50" min="50" max="10000">
+                                <small>ブローカーノードのストレージ処理量。PVC基本：50MB/s、高性能：300MB/s</small>
                             </div>
                             
                             <div class="form-group">
@@ -584,16 +584,16 @@
                                 </li>
                                 <li><strong>ネットワーク制約：</strong>
                                     <ul>
-                                        <li>25Gbps NIC基準: 理論値3,125MB/s → 安全率80% = 2,500MB/s</li>
-                                        <li>実効処理量: 2,500MB/s ÷ (コンシューマーグループ数 + RF - 1)</li>
-                                        <li>例: RF=3, 3グループの場合 → 2,500 ÷ (3+2) = 500MB/s/ブローカー</li>
+                                        <li>20Gbps NIC基準: 理論値2,500MB/s → 安全率80% = 2,000MB/s</li>
+                                        <li>実効処理量: 2,000MB/s ÷ (コンシューマーグループ数 + RF - 1)</li>
+                                        <li>例: RF=3, 3グループの場合 → 2,000 ÷ (3+2) = 400MB/s/ブローカー</li>
                                     </ul>
                                 </li>
                                 <li><strong>ディスクI/O制約：</strong>
                                     <ul>
-                                        <li>NVMe SSD基準: 理論値3,000MB/s → 安全率70% = 2,100MB/s</li>
-                                        <li>実効処理量: 2,100MB/s ÷ RF（書込み複製負荷）</li>
-                                        <li>例: RF=3の場合 → 2,100 ÷ 3 = 700MB/s/ブローカー</li>
+                                        <li>PVC基準: 理論値50MB/s → 安全率70% = 35MB/s</li>
+                                        <li>実効処理量: 35MB/s ÷ RF（書込み複製負荷）</li>
+                                        <li>例: RF=3の場合 → 35 ÷ 3 = 12MB/s/ブローカー</li>
                                     </ul>
                                 </li>
                                 <li><strong>最終決定：</strong> max(3台最小, パーティション制約, ネットワーク制約, ディスク制約)</li>
@@ -1075,8 +1075,8 @@
             const tCluster = bytesPerSecond / 1024 / 1024; // MB/s
             
             // 3. ハードウェア安全上限値設定
-            const nicBandwidthGbps = parseInt(document.getElementById('nicBandwidth').value) || 25;
-            const diskThroughputMBps = parseInt(document.getElementById('diskThroughput').value) || 3000;
+            const nicBandwidthGbps = parseInt(document.getElementById('nicBandwidth').value) || 20;
+            const diskThroughputMBps = parseInt(document.getElementById('diskThroughput').value) || 50;
             
             // 4. 各制約別必要ブローカー数
             const brokersByPartitions = Math.ceil((actualTotalPartitions * replicationFactor) / 4000);
